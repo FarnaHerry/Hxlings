@@ -7,6 +7,7 @@ import hxlings.theme;
 import hxlings.icons;
 import hxlings.store;
 import hxlings.components;
+import hxlings.page.packages;
 
 using namespace huxerui;
 
@@ -111,6 +112,21 @@ View DashboardPage() {
             [store, tasks, toast] {
                 store->RunSelfCleanAsync(tasks, toast, true);
                 store->active_nav = 5;
+            },
+            true,
+            icons::TrashIcon(),
+            true
+        ),
+        ActionButton(
+            "批量清理过期版本",
+            ButtonTone::Secondary,
+            [dialog, store, tasks, toast] {
+                if (!store->has_scanned_expired.Get() && !store->scanning_expired.Get() && !store->skip_initial_refresh) {
+                    store->ScanExpiredVersions(tasks);
+                }
+                dialog.Show([store, tasks, toast](DialogContext ctx) {
+                    return BatchPruneDialogContent(ctx, store, tasks, toast);
+                });
             },
             true,
             icons::TrashIcon(),

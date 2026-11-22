@@ -240,6 +240,43 @@ struct SelfLogEntry {
     bool operator==(const SelfLogEntry&) const = default;
 };
 
+struct RemovePlanItem {
+    std::string version;
+    std::uint64_t bytes = 0;
+
+    bool operator==(const RemovePlanItem&) const = default;
+};
+
+struct RemovePlanKept {
+    std::string version;
+    std::string reason;
+
+    bool operator==(const RemovePlanKept&) const = default;
+};
+
+struct RemovePlan {
+    std::string name;
+    std::string older_than;
+    bool dry_run = true;
+    std::uint64_t total_bytes = 0;
+    std::vector<RemovePlanItem> remove;
+    std::vector<RemovePlanKept> keep;
+
+    bool operator==(const RemovePlan&) const = default;
+};
+
+struct ExpiredPackagePlan {
+    std::string key;
+    std::string ns;
+    std::string name;
+    std::string cutoff_version;
+    bool cutoff_is_active = false;
+    std::size_t installed_count = 0;
+    RemovePlan plan;
+
+    bool operator==(const ExpiredPackagePlan&) const = default;
+};
+
 struct NdjsonEvent {
     std::string kind;
     std::string data_kind;

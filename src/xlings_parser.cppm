@@ -116,9 +116,56 @@ std::optional<float> ExtractProgressPercent(const json& doc) {
     return std::nullopt;
 }
 
+bool IsVersionSeparator(char ch) {
+    return ch == '.' || ch == '-' || ch == '_' || ch == '+';
+}
+
+std::string_view NextVersionSegment(std::string_view sv, std::size_t& pos) {
+    while (pos < sv.size() && IsVersionSeparator(sv[pos])) ++pos;
+    const std::size_t start = pos;
+    while (pos < sv.size() && !IsVersionSeparator(sv[pos])) ++pos;
+    return sv.substr(start, pos - start);
+}
+
+bool IsAllAsciiDigits(std::string_view sv) {
+    if (sv.empty()) return false;
+    for (const unsigned char ch : sv) {
+        if (ch < '0' || ch > '9') return false;
+    }
+    return true;
+}
+
+std::string_view StripLeadingZeros(std::string_view sv) {
+    std::size_t idx = 0;
+    while (idx < sv.size() && sv[idx] == '0') ++idx;
+    return sv.substr(idx);
+}
+
 } // namespace hxlings::detail
 
 export namespace hxlings {
+
+int CompareVersionStrings(std::string_view a, std::string_view b) {
+    std::size_t pa = 0;
+    std::size_t pb = 0;
+    while (pa < a.size() || pb < b.size()) {
+        const std::string_view sa = detail::NextVersionSegment(a, pa);
+        const std::string_view sb = detail::NextVersionSegment(b, pb);
+        if (sa.empty() && sb.empty()) break;
+        if (sa.empty()) return -1;
+        if (sb.empty()) return 1;
+
+        if (detail::IsAllAsciiDigits(sa) && detail::IsAllAsciiDigits(sb)) {
+            const std::string_view ta = detail::StripLeadingZeros(sa);
+            const std::string_view tb = detail::StripLeadingZeros(sb);
+            if (ta.size() != tb.size()) return (ta.size() < tb.size()) ? -1 : 1;
+            if (ta != tb) return (ta < tb) ? -1 : 1;
+        } else if (sa != sb) {
+            return (sa < sb) ? -1 : 1;
+        }
+    }
+    return 0;
+}
 
 PackageSpecParts SplitPackageSpec(std::string_view spec) {
     PackageSpecParts parts;
@@ -371,8 +418,12 @@ std::vector<PkgGroup> GroupInstalledPackages(const std::vector<InstalledPkg>& it
             grp.description = item.description;
         }
         if (item.is_active) {
-            grp.active_version = item.version;
-            if (!item.description.empty()) grp.description = item.description;
+            if (grp.active_version.empty() || CompareVersionStrings(item.version, grp.active_version) > 0) {
+                grp.active_version = item.version;
+                if (!item.description.empty()) grp.description = item.description;
+            } else if (grp.description.empty() && !item.description.empty()) {
+                grp.description = item.description;
+            }
         }
         if (item.is_degraded) {
             grp.has_degraded = true;
@@ -386,6 +437,8 @@ std::vector<PkgGroup> GroupInstalledPackages(const std::vector<InstalledPkg>& it
         std::ranges::stable_sort(grp.versions, [](const InstalledPkg& a, const InstalledPkg& b) {
             if (a.is_active != b.is_active) return a.is_active > b.is_active;
             if (a.is_degraded != b.is_degraded) return a.is_degraded > b.is_degraded;
+            const int cmp = CompareVersionStrings(a.version, b.version);
+            if (cmp != 0) return cmp > 0;
             return a.version > b.version;
         });
         groups.push_back(std::move(grp));
@@ -495,6 +548,43 @@ std::vector<InstallPlanItem> ParseInstallPlanEvents(const std::vector<NdjsonEven
         }
     }
     return out;
+}
+
+std::optional<RemovePlan> ParseRemovePlanEvents(const std::vector<NdjsonEvent>& events) {
+    std::optional<RemovePlan> latest;
+    for (const auto& ev : events) {
+        if (ev.kind != "data" || ev.data_kind != "remove_plan") continue;
+        const auto obj = detail::TryParseJsonObject(ev.raw_line);
+        if (!obj || !obj->contains("payload") || !(*obj)["payload"].is_object()) continue;
+        const auto& pl = (*obj)["payload"];
+
+        RemovePlan plan;
+        plan.name = detail::JsonString(pl, "name");
+        plan.older_than = detail::JsonString(pl, "older_than");
+        plan.dry_run = detail::JsonBool(pl, "dry_run", true);
+        plan.total_bytes = detail::JsonUint64(pl, "bytes");
+
+        if (pl.contains("remove") && pl["remove"].is_array()) {
+            for (const auto& r : pl["remove"]) {
+                if (!r.is_object()) continue;
+                plan.remove.push_back(RemovePlanItem{
+                    .version = detail::JsonString(r, "version"),
+                    .bytes = detail::JsonUint64(r, "bytes"),
+                });
+            }
+        }
+        if (pl.contains("keep") && pl["keep"].is_array()) {
+            for (const auto& k : pl["keep"]) {
+                if (!k.is_object()) continue;
+                plan.keep.push_back(RemovePlanKept{
+                    .version = detail::JsonString(k, "version"),
+                    .reason = detail::JsonString(k, "reason"),
+                });
+            }
+        }
+        latest = std::move(plan);
+    }
+    return latest;
 }
 
 std::vector<SubosEntry> ParseSubosListEvents(const std::vector<NdjsonEvent>& events) {

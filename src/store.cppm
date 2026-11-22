@@ -67,7 +67,12 @@ public:
     State<std::optional<PackageDetail>> selected_installed_detail{std::optional<PackageDetail>{}};
     State<std::vector<InstalledVersionItem>> selected_installed_versions{std::vector<InstalledVersionItem>{}};
     State<std::vector<InstallPlanItem>> installed_plan_preview{std::vector<InstallPlanItem>{}};
+    State<std::optional<RemovePlan>> selected_remove_plan{std::optional<RemovePlan>{}};
     State<bool> loading_installed_detail{false};
+    State<bool> loading_remove_plan{false};
+    State<std::vector<ExpiredPackagePlan>> expired_plans{std::vector<ExpiredPackagePlan>{}};
+    State<bool> scanning_expired{false};
+    State<bool> has_scanned_expired{false};
 
     // Store / Search
     State<std::vector<SearchPkg>> search_results{std::vector<SearchPkg>{}};
@@ -206,7 +211,9 @@ public:
     void LoadInstalledDetail(TaskScope tasks, const PkgGroup& group) {
         selected_installed_key = group.key;
         installed_plan_preview = std::vector<InstallPlanItem>{};
+        selected_remove_plan = std::optional<RemovePlan>{};
         loading_installed_detail = true;
+        loading_remove_plan = false;
 
         auto self = shared_from_this();
         const XlingsClient client = client_;
@@ -392,6 +399,12 @@ public:
                         if (!ev.message.empty()) line = "[提示] " + ev.message;
                     } else if (ev.kind == "data" && ev.data_kind == "subos_exec_output") {
                         line = ev.message;
+                    } else if (ev.kind == "data" && ev.data_kind == "remove_plan") {
+                        if (const auto p = ParseRemovePlanEvents({ev}); p.has_value()) {
+                            line = "[清理计划] " + p->name + ": 移除 " + std::to_string(p->remove.size()) +
+                                   " 个旧版本 (" + FormatBytes(p->total_bytes) + ")，保留 " +
+                                   std::to_string(p->keep.size()) + " 个";
+                        }
                     } else if (ev.kind == "raw") {
                         line = ev.message;
                     }
@@ -480,9 +493,154 @@ public:
                 return client.RemovePackage(target, older_than, dry_run, std::move(on_ev), std::move(ctrl));
             },
             [dry_run](const std::shared_ptr<XlingsStore>& s, TaskScope t, const CommandOutcome&) {
-                if (!dry_run) s->RefreshAll(t);
+                if (!dry_run) {
+                    s->expired_plans = std::vector<ExpiredPackagePlan>{};
+                    s->has_scanned_expired = false;
+                    s->selected_remove_plan = std::optional<RemovePlan>{};
+                    s->RefreshAll(t);
+                }
             }
         );
+    }
+
+    void PreviewSingleRemoveOlderThan(TaskScope tasks, std::string pkg_key, std::string older_than) {
+        if (pkg_key.empty() || older_than.empty()) return;
+        loading_remove_plan = true;
+        selected_remove_plan = std::optional<RemovePlan>{};
+
+        auto self = shared_from_this();
+        const XlingsClient client = client_;
+        tasks.Launch([self, client, pkg_key = std::move(pkg_key), older_than = std::move(older_than)]() -> Task<void> {
+            auto plan = co_await RunWorker([client, pkg_key, older_than]() {
+                return client.PlanRemoveOlderThan(pkg_key, older_than);
+            });
+            if (self->selected_installed_key.Get() == pkg_key) {
+                if (!plan.has_value()) {
+                    plan = RemovePlan{
+                        .name = SplitPackageSpec(pkg_key).name,
+                        .older_than = older_than,
+                        .dry_run = true,
+                    };
+                }
+                self->selected_remove_plan = std::move(plan);
+                self->loading_remove_plan = false;
+            }
+        });
+    }
+
+    void ScanExpiredVersions(TaskScope tasks) {
+        if (scanning_expired.Get()) return;
+        scanning_expired = true;
+
+        std::vector<PkgGroup> candidates;
+        for (const auto& g : installed_groups.Get()) {
+            if (g.versions.size() > 1) candidates.push_back(g);
+        }
+
+        auto self = shared_from_this();
+        const XlingsClient client = client_;
+        tasks.Launch([self, client, candidates = std::move(candidates)]() mutable -> Task<void> {
+            auto results = co_await RunWorker([client, candidates = std::move(candidates)]() {
+                std::vector<ExpiredPackagePlan> out;
+                for (const auto& g : candidates) {
+                    std::string cutoff = g.active_version;
+                    bool cutoff_is_active = !cutoff.empty();
+
+                    const auto inst_vers = client.ListInstalledVersions(g.name);
+                    std::string detected_active;
+                    for (const auto& iv : inst_vers) {
+                        if (!iv.active || iv.version.empty()) continue;
+                        const std::size_t colon = iv.version.find(':');
+                        std::string candidate_ver;
+                        if (colon == std::string::npos) {
+                            candidate_ver = iv.version;
+                        } else if (iv.version.substr(0, colon) == g.ns) {
+                            candidate_ver = iv.version.substr(colon + 1);
+                        }
+                        if (!candidate_ver.empty() &&
+                            (detected_active.empty() || CompareVersionStrings(candidate_ver, detected_active) > 0)) {
+                            detected_active = std::move(candidate_ver);
+                        }
+                    }
+                    if (!detected_active.empty()) {
+                        cutoff = std::move(detected_active);
+                        cutoff_is_active = true;
+                    }
+
+                    if (cutoff.empty()) {
+                        cutoff_is_active = false;
+                        for (const auto& v : g.versions) {
+                            if (!v.version.empty() &&
+                                (cutoff.empty() || CompareVersionStrings(v.version, cutoff) > 0)) {
+                                cutoff = v.version;
+                            }
+                        }
+                    }
+                    if (cutoff.empty()) continue;
+
+                    auto plan = client.PlanRemoveOlderThan(g.key, cutoff);
+                    if (plan.has_value() && (!plan->remove.empty() || !plan->keep.empty())) {
+                        out.push_back(ExpiredPackagePlan{
+                            .key = g.key,
+                            .ns = g.ns,
+                            .name = g.name,
+                            .cutoff_version = std::move(cutoff),
+                            .cutoff_is_active = cutoff_is_active,
+                            .installed_count = g.versions.size(),
+                            .plan = std::move(*plan),
+                        });
+                    }
+                }
+
+                std::ranges::sort(out, [](const ExpiredPackagePlan& a, const ExpiredPackagePlan& b) {
+                    if (a.plan.total_bytes != b.plan.total_bytes) return a.plan.total_bytes > b.plan.total_bytes;
+                    if (a.plan.remove.size() != b.plan.remove.size()) return a.plan.remove.size() > b.plan.remove.size();
+                    return a.key < b.key;
+                });
+                return out;
+            });
+
+            self->expired_plans = std::move(results);
+            self->scanning_expired = false;
+            self->has_scanned_expired = true;
+        });
+    }
+
+    void BatchRemoveExpiredAsync(TaskScope tasks, ToastHandle toast, std::vector<ExpiredPackagePlan> targets) {
+        std::vector<RemovalStep> steps;
+        std::size_t total_vers = 0;
+        for (const auto& t : targets) {
+            if (t.plan.remove.empty() || t.cutoff_version.empty()) continue;
+            total_vers += t.plan.remove.size();
+            steps.push_back(RemovalStep{
+                .target = t.key,
+                .older_than = t.cutoff_version,
+                .progress_message = "正在清理 " + t.key + " 早于 " + t.cutoff_version + " 的旧版本...",
+            });
+        }
+        if (steps.empty()) {
+            toast.Show("没有可清理的过期版本");
+            return;
+        }
+        const std::string title =
+            "批量清理过期版本 (" + std::to_string(steps.size()) + " 个包 · " + std::to_string(total_vers) + " 个版本)";
+        ExecuteBatchRemovalSteps(tasks, toast, title, std::move(steps));
+    }
+
+    void BatchRemoveTargetsAsync(TaskScope tasks, ToastHandle toast, std::vector<std::string> full_targets) {
+        if (full_targets.empty()) return;
+        std::vector<RemovalStep> steps;
+        steps.reserve(full_targets.size());
+        for (auto& target : full_targets) {
+            std::string msg = "正在卸载 " + target + "...";
+            steps.push_back(RemovalStep{
+                .target = std::move(target),
+                .older_than = {},
+                .progress_message = std::move(msg),
+            });
+        }
+        const std::string title = "批量卸载 " + std::to_string(steps.size()) + " 个指定版本";
+        ExecuteBatchRemovalSteps(tasks, toast, title, std::move(steps));
     }
 
     void ActivateVersionAsync(TaskScope tasks, ToastHandle toast, std::string plain_name, std::string version) {
@@ -797,6 +955,91 @@ public:
     }
 
 private:
+    struct RemovalStep {
+        std::string target;
+        std::string older_than;
+        std::string progress_message;
+    };
+
+    void ExecuteBatchRemovalSteps(
+        TaskScope tasks,
+        ToastHandle toast,
+        std::string title,
+        std::vector<RemovalStep> steps
+    ) {
+        if (steps.empty()) return;
+        const XlingsClient client = client_;
+        ExecuteOperation(
+            tasks,
+            toast,
+            std::move(title),
+            [client, steps = std::move(steps)](auto on_ev, auto, auto ctrl) -> CommandOutcome {
+                CommandOutcome combined;
+                std::size_t succeeded = 0;
+                std::size_t failed = 0;
+                bool cancelled = false;
+                std::string last_error;
+
+                for (std::size_t i = 0; i < steps.size(); ++i) {
+                    if (ctrl && ctrl->cancel_requested.load(std::memory_order_acquire)) {
+                        cancelled = true;
+                        break;
+                    }
+                    if (ctrl) ctrl->pid.store(-1, std::memory_order_release);
+
+                    {
+                        NdjsonEvent prog;
+                        prog.kind = "progress";
+                        prog.progress_percent = static_cast<float>(i) / static_cast<float>(steps.size());
+                        prog.message = steps[i].progress_message;
+                        on_ev(prog);
+                    }
+
+                    const CommandOutcome step_out = client.RemovePackage(
+                        steps[i].target, steps[i].older_than, false, on_ev, ctrl
+                    );
+                    if (ctrl && ctrl->cancel_requested.load(std::memory_order_acquire)) {
+                        cancelled = true;
+                        if (step_out.ok) {
+                            ++succeeded;
+                        } else {
+                            last_error = step_out.error_message;
+                        }
+                        break;
+                    }
+                    if (step_out.ok) {
+                        ++succeeded;
+                    } else {
+                        ++failed;
+                        if (!step_out.error_message.empty()) {
+                            last_error = steps[i].target + ": " + step_out.error_message;
+                        } else {
+                            last_error = steps[i].target + ": exit code " + std::to_string(step_out.exit_code);
+                        }
+                    }
+                }
+
+                combined.ok = (failed == 0 && !cancelled);
+                combined.exit_code = combined.ok ? 0 : 1;
+                if (cancelled) {
+                    combined.error_message =
+                        "已取消 (已完成 " + std::to_string(succeeded) + "/" + std::to_string(steps.size()) + ")";
+                } else if (failed > 0) {
+                    combined.error_message =
+                        "完成 " + std::to_string(succeeded) + " 项，" + std::to_string(failed) +
+                        " 项失败" + (last_error.empty() ? std::string{} : (" (" + last_error + ")"));
+                }
+                return combined;
+            },
+            [](const std::shared_ptr<XlingsStore>& s, TaskScope t, const CommandOutcome&) {
+                s->expired_plans = std::vector<ExpiredPackagePlan>{};
+                s->has_scanned_expired = false;
+                s->selected_remove_plan = std::optional<RemovePlan>{};
+                s->RefreshAll(t);
+            }
+        );
+    }
+
     XlingsClient client_;
     std::shared_ptr<ActiveProcessControl> active_process_;
 };

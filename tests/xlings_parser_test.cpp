@@ -185,6 +185,60 @@ void TestLiveXlingsBinaryAndEnv() {
     Check(!in_mcpp_registry(env.xlings_home), "Live xlings_home is user home, not mcpp sandbox: " + env.xlings_home);
 }
 
+void TestVersionCompareAndMultiActiveGrouping() {
+    Check(CompareVersionStrings("2026.11.21.1", "2026.9.30.1") > 0, "CompareVersionStrings 2026.11.21.1 > 2026.9.30.1");
+    Check(CompareVersionStrings("26.13.0", "24.20.0") > 0, "CompareVersionStrings 26.13.0 > 24.20.0");
+    Check(CompareVersionStrings("4.5.0", "4.4.2") > 0, "CompareVersionStrings 4.5.0 > 4.4.2");
+    Check(CompareVersionStrings("1.2.1", "1.2") > 0, "CompareVersionStrings 1.2.1 > 1.2");
+    Check(CompareVersionStrings("2026.11.21.1", "2026.11.21.1") == 0, "CompareVersionStrings equal");
+
+    const std::string sample =
+        "{\"dataKind\":\"styled_list\",\"kind\":\"data\",\"payload\":{\"items\":["
+        "[\"xim:cmake@4.4.2\",\"CMake\",\"\"],"
+        "[\"xim:cmake@4.5.0\",\"CMake\",\"\"],"
+        "[\"xim:mcpp@2026.9.30.1\",\"mcpp\",\"inactive\"],"
+        "[\"xim:mcpp@2026.11.18.1\",\"mcpp\",\"inactive\"],"
+        "[\"xim:mcpp@2026.11.21.1\",\"mcpp\",\"\"]]}}\n";
+    const auto groups = GroupInstalledPackages(ParseInstalledPackagesEvents(ParseNdjsonLines(sample)));
+    Check(groups.size() == 2, "MultiActiveGrouping group count");
+    Check(groups[0].name == "cmake" && groups[0].active_version == "4.5.0",
+          "MultiActiveGrouping picks highest active version 4.5.0");
+    Check(groups[1].name == "mcpp" && groups[1].versions.size() == 3 &&
+              groups[1].versions[0].version == "2026.11.21.1" &&
+              groups[1].versions[1].version == "2026.11.18.1" &&
+              groups[1].versions[2].version == "2026.9.30.1",
+          "MultiActiveGrouping orders versions newest-first semantically");
+}
+
+void TestParseRemovePlanEvents() {
+    const std::string xlings_plan_raw =
+        "{\"dataKind\":\"remove_plan\",\"kind\":\"data\",\"payload\":{\"bytes\":1099397952,"
+        "\"dry_run\":true,\"keep\":[],\"name\":\"xlings\",\"older_than\":\"2026.11.22.1\","
+        "\"remove\":[{\"bytes\":49518230,\"version\":\"2026.11.16.1\"},"
+        "{\"bytes\":49093304,\"version\":\"2026.10.26.1\"}]}}\n"
+        "{\"exitCode\":0,\"kind\":\"result\"}\n";
+    const auto p1 = ParseRemovePlanEvents(ParseNdjsonLines(xlings_plan_raw));
+    Check(p1.has_value() && p1->name == "xlings" && p1->older_than == "2026.11.22.1" &&
+              p1->total_bytes == 1099397952ULL && p1->remove.size() == 2 &&
+              p1->remove[0].version == "2026.11.16.1" && p1->remove[0].bytes == 49518230ULL &&
+              p1->keep.empty(),
+          "ParseRemovePlanEvents xlings plan");
+
+    const std::string glibc_plan_raw =
+        "{\"dataKind\":\"remove_plan\",\"kind\":\"data\",\"payload\":{\"bytes\":0,"
+        "\"dry_run\":true,\"keep\":[{\"reason\":\"linked by xim:gcc-runtime@15.1.0\",\"version\":\"2.39\"}],"
+        "\"name\":\"glibc\",\"older_than\":\"2.44.2\",\"remove\":[]}}\n";
+    const auto p2 = ParseRemovePlanEvents(ParseNdjsonLines(glibc_plan_raw));
+    Check(p2.has_value() && p2->name == "glibc" && p2->total_bytes == 0ULL &&
+              p2->remove.empty() && p2->keep.size() == 1 &&
+              p2->keep[0].version == "2.39" &&
+              p2->keep[0].reason == "linked by xim:gcc-runtime@15.1.0",
+          "ParseRemovePlanEvents glibc kept plan");
+
+    const auto empty_plan = ParseRemovePlanEvents(ParseNdjsonLines("{\"exitCode\":0,\"kind\":\"result\"}\n"));
+    Check(!empty_plan.has_value(), "ParseRemovePlanEvents returns nullopt when absent");
+}
+
 } // namespace
 
 int main() {
@@ -195,6 +249,8 @@ int main() {
     TestSearchAndInfoAndPlan();
     TestSubosReposIndexesAndCli();
     TestLiveXlingsBinaryAndEnv();
+    TestVersionCompareAndMultiActiveGrouping();
+    TestParseRemovePlanEvents();
 
     if (failures == 0) {
         std::println("All parser and xlings integration tests passed.");

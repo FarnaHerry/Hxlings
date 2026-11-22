@@ -203,6 +203,96 @@ std::shared_ptr<XlingsStore> MakeSeededStore() {
         {.spec = "xim:xlings@2026.11.22.1", .note = "up to date", .action_code = 1},
     };
 
+    RemovePlan xlings_remove_plan{
+        .name = "xlings",
+        .older_than = "2026.11.22.1",
+        .dry_run = true,
+        .total_bytes = 1099397952ULL,
+        .remove = {
+            {.version = "2026.11.16.1", .bytes = 49518230ULL},
+            {.version = "2026.10.26.1", .bytes = 49093304ULL},
+            {.version = "2026.10.19.2", .bytes = 42194245ULL},
+            {.version = "2026.9.30.1", .bytes = 132994043ULL},
+            {.version = "2026.8.27.5", .bytes = 118491069ULL},
+        },
+        .keep = {},
+    };
+    store->selected_remove_plan = xlings_remove_plan;
+
+    std::vector<RemovePlanItem> mcpp_items;
+    mcpp_items.reserve(25);
+    for (int i = 0; i < 25; ++i) {
+        mcpp_items.push_back(RemovePlanItem{
+            .version = "2026.10." + std::to_string(25 - i) + ".1",
+            .bytes = 25099039ULL,
+        });
+    }
+    store->has_scanned_expired = true;
+    store->expired_plans = {
+        ExpiredPackagePlan{
+            .key = "xim:xlings",
+            .ns = "xim",
+            .name = "xlings",
+            .cutoff_version = "2026.11.22.1",
+            .cutoff_is_active = true,
+            .installed_count = 14,
+            .plan = RemovePlan{
+                .name = "xlings",
+                .older_than = "2026.11.22.1",
+                .dry_run = true,
+                .total_bytes = 1099397952ULL,
+                .remove = {
+                    {.version = "2026.11.16.1", .bytes = 49518230ULL},
+                    {.version = "2026.10.26.1", .bytes = 49093304ULL},
+                    {.version = "2026.10.19.2", .bytes = 42194245ULL},
+                    {.version = "2026.10.17.1", .bytes = 39979315ULL},
+                    {.version = "2026.10.9.2", .bytes = 27998639ULL},
+                    {.version = "2026.10.4.1", .bytes = 18910978ULL},
+                    {.version = "2026.9.30.1", .bytes = 132994043ULL},
+                    {.version = "2026.9.26.2", .bytes = 128322069ULL},
+                    {.version = "2026.9.16.1", .bytes = 125578521ULL},
+                    {.version = "2026.9.12.1", .bytes = 124695718ULL},
+                    {.version = "2026.9.5.1", .bytes = 121500951ULL},
+                    {.version = "2026.9.3.2", .bytes = 120120870ULL},
+                    {.version = "2026.8.27.5", .bytes = 118491069ULL},
+                },
+                .keep = {},
+            },
+        },
+        ExpiredPackagePlan{
+            .key = "xim:mcpp",
+            .ns = "xim",
+            .name = "mcpp",
+            .cutoff_version = "2026.11.21.1",
+            .cutoff_is_active = true,
+            .installed_count = 26,
+            .plan = RemovePlan{
+                .name = "mcpp",
+                .older_than = "2026.11.21.1",
+                .dry_run = true,
+                .total_bytes = 627475989ULL,
+                .remove = std::move(mcpp_items),
+                .keep = {},
+            },
+        },
+        ExpiredPackagePlan{
+            .key = "xim:glibc",
+            .ns = "xim",
+            .name = "glibc",
+            .cutoff_version = "2.44.2",
+            .cutoff_is_active = true,
+            .installed_count = 3,
+            .plan = RemovePlan{
+                .name = "glibc",
+                .older_than = "2.44.2",
+                .dry_run = true,
+                .total_bytes = 0ULL,
+                .remove = {},
+                .keep = {{.version = "2.39", .reason = "linked by xim:gcc-runtime@15.1.0"}},
+            },
+        },
+    };
+
     store->has_searched = true;
     store->search_results = {
         SearchPkg{.package = "xim:gcc", .ns = "xim", .name = "gcc", .version = "16.1.0",
@@ -615,7 +705,7 @@ void AuditCurrentScreen(
         if (active_page_bounds.has_value() &&
             btn.bounds.x >= active_page_bounds->x - 1.0F &&
             btn.bounds.y >= active_page_bounds->y - 1.0F &&
-            btn.bounds.y < active_page_bounds->y + active_page_bounds->height - 1.0F) {
+            btn.bounds.y < active_page_bounds->y + active_page_bounds->height) {
             effective = effective.Intersection(*active_page_bounds);
             if (effective.IsEmpty()) continue;
         }
@@ -701,6 +791,36 @@ void AuditAllPagesAtViewport(
     SafeTap(ctx, vp_tag + " / Packages", ui.Find(UiSelector::Key("nav-packages")), "nav-packages");
     ui.Pump();
     AuditCurrentScreen(ctx, ui, w, h, "Packages", "page-packages", true);
+
+    if (SafeTap(ctx, vp_tag + " / BatchPruneDialog", ui.Find(UiSelector::Text("批量清理")), "批量清理")) {
+        ui.Pump(500ms);
+        ui.Pump();
+        const auto dlg_nodes = ui.Find(UiSelector::Text("批量清理过期版本")).All();
+        const bool dlg_visible = std::ranges::any_of(
+            dlg_nodes,
+            [](const UiNodeInfo& n) { return n.participates_in_layout && n.in_viewport; }
+        );
+        if (!dlg_visible) {
+            ctx.Flag(vp_tag + " / BatchPruneDialog", "BatchPruneDialog content not visible in viewport");
+        }
+        AuditCurrentScreen(ctx, ui, w, h, "BatchPruneDialog", "page-packages", false, true);
+        if (SafeTap(ctx, vp_tag + " / BatchPruneDialog", ui.Find(UiSelector::Text("取消")), "取消(BatchPruneDialog)")) {
+            try {
+                ui.PumpUntil(
+                    [&] {
+                        return !ui.Find(UiSelector::Text("执行批量清理")).Exists() &&
+                               std::ranges::none_of(
+                                   ui.Find(UiSelector::Text("批量清理过期版本")).All(),
+                                   [](const UiNodeInfo& n) { return n.participates_in_layout; }
+                               );
+                    },
+                    {.timeout = 2s, .step = 50ms}
+                );
+            } catch (const UiTestFailure& ex) {
+                ctx.Flag(vp_tag + " / BatchPruneDialog", std::string("BatchPruneDialog still mounted after cancel: ") + ex.what());
+            }
+        }
+    }
 
     // Store (with split view)
     SafeTap(ctx, vp_tag + " / Store", ui.Find(UiSelector::Key("nav-store")), "nav-store");

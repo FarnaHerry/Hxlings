@@ -3,6 +3,7 @@ export module hxlings.page.packages;
 import std;
 import huxerui;
 import xlings.types;
+import xlings.parser;
 import hxlings.theme;
 import hxlings.icons;
 import hxlings.store;
@@ -34,9 +35,268 @@ std::string MakeTargetSpec(std::string_view ns, std::string_view name, std::stri
     return res;
 }
 
+bool ContainsKey(const std::vector<std::string>& items, std::string_view target) {
+    return std::ranges::any_of(items, [&](const std::string& item) { return item == target; });
+}
+
+void SetKeyPresent(std::vector<std::string>& items, const std::string& target, bool present) {
+    const auto it = std::ranges::find(items, target);
+    if (present) {
+        if (it == items.end()) items.push_back(target);
+    } else if (it != items.end()) {
+        items.erase(it);
+    }
+}
+
+std::string SummarizeVersionsPreview(const std::vector<RemovePlanItem>& items) {
+    if (items.empty()) return {};
+    const std::size_t shown = std::min<std::size_t>(items.size(), 4);
+    std::string out = "待移除: ";
+    for (std::size_t i = 0; i < shown; ++i) {
+        if (i > 0) out += ", ";
+        out += items[i].version;
+    }
+    if (items.size() > shown) {
+        out += " 等共 " + std::to_string(items.size()) + " 个版本";
+    }
+    return out;
+}
+
 } // namespace hxlings::detail
 
 export namespace hxlings {
+
+[[huxerui::composable]]
+View BatchPruneDialogContent(
+    DialogContext ctx,
+    std::shared_ptr<XlingsStore> store,
+    TaskScope tasks,
+    ToastHandle toast
+) {
+    auto excluded_keys = UseState(std::vector<std::string>{});
+
+    const ThemeSpec& theme = UseTheme();
+    const StatusPalette sp = ResolveStatusPalette(theme);
+
+    const auto& plans = store->expired_plans.Get();
+    const bool scanning = store->scanning_expired.Get();
+    const bool task_running = store->task_running.Get();
+    const auto& excluded = excluded_keys.Get();
+
+    std::vector<std::string> all_removable_keys;
+    std::vector<ExpiredPackagePlan> selected_targets;
+    std::size_t total_removable_pkgs = 0;
+    std::uint64_t total_reclaimable_bytes = 0;
+    std::size_t sel_pkgs = 0;
+    std::size_t sel_vers = 0;
+    std::uint64_t sel_bytes = 0;
+
+    for (const auto& item : plans) {
+        if (item.plan.remove.empty()) continue;
+        ++total_removable_pkgs;
+        total_reclaimable_bytes += item.plan.total_bytes;
+        all_removable_keys.push_back(item.key);
+        if (!detail::ContainsKey(excluded, item.key)) {
+            ++sel_pkgs;
+            sel_vers += item.plan.remove.size();
+            sel_bytes += item.plan.total_bytes;
+            selected_targets.push_back(item);
+        }
+    }
+
+    const std::string header_text =
+        scanning
+            ? std::string("正在通过 xlings dry-run 扫描过期版本...")
+            : (total_removable_pkgs == 0
+                   ? std::string("未发现可清理的过期版本")
+                   : ("共扫描到 " + std::to_string(total_removable_pkgs) + " 个可清理包 · 可释放 " +
+                      FormatBytes(total_reclaimable_bytes)));
+
+    View summary_bar = Row {
+        Text(header_text, TextRole::Body)
+            .Style(TextStyle{
+                .font = Font::System(12.5F).WithWeight(FontWeight::SemiBold),
+                .foreground = theme.colors.on_surface_variant,
+            })
+            .With(Grow(1.0F)),
+        ActionButton(
+            "全选",
+            ButtonTone::Ghost,
+            [excluded_keys]() mutable { excluded_keys = std::vector<std::string>{}; },
+            !scanning && total_removable_pkgs > 0,
+            std::nullopt,
+            true
+        ),
+        ActionButton(
+            "全不选",
+            ButtonTone::Ghost,
+            [excluded_keys, all_removable_keys]() mutable { excluded_keys = all_removable_keys; },
+            !scanning && total_removable_pkgs > 0,
+            std::nullopt,
+            true
+        ),
+        ActionButton(
+            "重新扫描",
+            ButtonTone::Secondary,
+            [excluded_keys, store, tasks]() mutable {
+                excluded_keys = std::vector<std::string>{};
+                store->ScanExpiredVersions(tasks);
+            },
+            !scanning && !store->skip_initial_refresh,
+            icons::RefreshIcon(),
+            true
+        ),
+    }.With(Spacing(8.0F), CrossAlign(CrossAxisAlignment::Center));
+
+    View list_body = View{};
+    if (scanning) {
+        list_body = Row {
+            Spacer{}.With(Grow(1.0F)),
+            ProgressCircle().With(Frame{.width = 20.0F, .height = 20.0F}),
+            Text("正在通过 xlings dry-run 扫描所有多版本包...", TextRole::Body)
+                .Style(TextStyle{.foreground = theme.colors.on_surface_variant}),
+            Spacer{}.With(Grow(1.0F)),
+        }.With(Padding(EdgeInsets::Symmetric(12.0F, 36.0F)), Spacing(10.0F), CrossAlign(CrossAxisAlignment::Center));
+    } else if (plans.empty()) {
+        list_body = EmptyState(
+            icons::CheckIcon(),
+            "暂无可清理的过期版本",
+            "所有多版本软件包均无早于基准版本的冗余旧版本"
+        );
+    } else {
+        std::vector<View> rows;
+        rows.reserve(plans.size());
+        for (std::size_t i = 0; i < plans.size(); ++i) {
+            const auto& item = plans[i];
+            const bool has_removable = !item.plan.remove.empty();
+            const bool is_checked = has_removable && !detail::ContainsKey(excluded, item.key);
+
+            std::string kept_summary;
+            if (!item.plan.keep.empty()) {
+                for (std::size_t k = 0; k < item.plan.keep.size(); ++k) {
+                    if (k > 0) kept_summary += "；";
+                    kept_summary += item.plan.keep[k].version;
+                    if (!item.plan.keep[k].reason.empty()) {
+                        kept_summary += " (" + item.plan.keep[k].reason + ")";
+                    }
+                }
+            }
+
+            if (has_removable) {
+                rows.push_back(
+                    Column {
+                        Row {
+                            Checkbox(is_checked).OnChanged([excluded_keys, key = item.key](bool checked) mutable {
+                                excluded_keys.Update([&](std::vector<std::string>& list) {
+                                    detail::SetKeyPresent(list, key, !checked);
+                                });
+                            }),
+                            Text(item.key, TextRole::Body)
+                                .Style(TextStyle{
+                                    .font = Font::System(13.5F).WithWeight(FontWeight::SemiBold),
+                                    .foreground = theme.colors.on_surface,
+                                })
+                                .With(Grow(1.0F)),
+                            StatusBadge(
+                                (item.cutoff_is_active ? "早于 " : "保留最新 ") + item.cutoff_version,
+                                theme.colors.on_surface_variant,
+                                sp.muted_bg
+                            ),
+                            StatusBadge(
+                                std::to_string(item.plan.remove.size()) + " 个 · " +
+                                    FormatBytes(item.plan.total_bytes),
+                                sp.info,
+                                sp.info_bg
+                            ),
+                        }.With(Spacing(6.0F), CrossAlign(CrossAxisAlignment::Center)),
+                        Text(detail::SummarizeVersionsPreview(item.plan.remove), TextRole::Label)
+                            .Style(TextStyle{
+                                .font = Font::Monospace(11.5F),
+                                .foreground = theme.colors.on_surface_variant,
+                            }),
+                        kept_summary.empty()
+                            ? View{}
+                            : Text("受保护保留: " + kept_summary, TextRole::Label)
+                                  .Style(TextStyle{
+                                      .font = Font::System(11.5F),
+                                      .foreground = sp.warning,
+                                  }),
+                    }.With(
+                        Padding(10.0F),
+                        Spacing(6.0F),
+                        Background(is_checked ? sp.card_elevated_bg : sp.card_bg),
+                        Border{is_checked ? WithAlpha(theme.colors.primary, 0.35F) : sp.border_soft, 1.0F},
+                        CornerRadius(8.0F),
+                        CrossAlign(CrossAxisAlignment::Stretch)
+                    ).Key("prune-item-" + item.key + "-" + std::to_string(i))
+                );
+            } else {
+                rows.push_back(
+                    Column {
+                        Row {
+                            StatusBadge("受依赖保护", sp.warning, sp.warning_bg),
+                            Text(item.key, TextRole::Body)
+                                .Style(TextStyle{
+                                    .font = Font::System(13.5F).WithWeight(FontWeight::SemiBold),
+                                    .foreground = theme.colors.on_surface,
+                                })
+                                .With(Grow(1.0F)),
+                            StatusBadge("早于 " + item.cutoff_version, theme.colors.on_surface_variant, sp.muted_bg),
+                        }.With(Spacing(6.0F), CrossAlign(CrossAxisAlignment::Center)),
+                        Text("已跳过删除: " + kept_summary, TextRole::Label)
+                            .Style(TextStyle{
+                                .font = Font::System(11.5F),
+                                .foreground = sp.warning,
+                            }),
+                    }.With(
+                        Padding(10.0F),
+                        Spacing(6.0F),
+                        Background(sp.warning_bg),
+                        Border{WithAlpha(sp.warning, 0.35F), 1.0F},
+                        CornerRadius(8.0F),
+                        CrossAlign(CrossAxisAlignment::Stretch)
+                    ).Key("prune-kept-" + item.key + "-" + std::to_string(i))
+                );
+            }
+        }
+
+        list_body = ScrollView(
+            Column(std::move(rows))
+                .With(Padding(4.0F), Spacing(8.0F), CrossAlign(CrossAxisAlignment::Stretch))
+        ).ScrollAxis(Axis::Vertical)
+            .With(Frame{.height = 210.0F}, ScrollBar{});
+    }
+
+    View body = Column {
+        std::move(summary_bar),
+        std::move(list_body),
+    }.With(Spacing(10.0F), CrossAlign(CrossAxisAlignment::Stretch));
+
+    View actions = Row {
+        Text(
+            "已选 " + std::to_string(sel_pkgs) + " 包 · " + std::to_string(sel_vers) + " 版本 · " +
+                FormatBytes(sel_bytes),
+            TextRole::Label
+        ).Style(TextStyle{
+            .font = Font::System(12.5F).WithWeight(FontWeight::Medium),
+            .foreground = theme.colors.on_surface_variant,
+        }).With(Grow(1.0F)),
+        ActionButton("取消", ButtonTone::Secondary, [ctx] { ctx.Dismiss(); }, true, std::nullopt, true),
+        ActionButton(
+            "执行批量清理",
+            ButtonTone::Danger,
+            [ctx, store, tasks, toast, selected_targets = std::move(selected_targets)]() mutable {
+                ctx.Dismiss();
+                store->BatchRemoveExpiredAsync(tasks, toast, std::move(selected_targets));
+            },
+            !selected_targets.empty() && !scanning && !task_running,
+            icons::TrashIcon(),
+            true
+        ),
+    }.With(Spacing(10.0F), CrossAlign(CrossAxisAlignment::Center));
+
+    return DialogCardShell("批量清理过期版本", std::move(body), std::move(actions), 560.0F);
+}
 
 [[huxerui::composable]]
 View PackagesPage() {
@@ -49,6 +309,7 @@ View PackagesPage() {
 
     auto filter_input = UseState(TextEditingValue::FromText(""));
     auto filter_mode = UseState<std::size_t>(0); // 0=all, 1=multi-version, 2=degraded
+    auto checked_targets = UseState(std::vector<std::string>{});
 
     const auto& all_groups = store->installed_groups.Get();
     const std::string selected_key = store->selected_installed_key.Get();
@@ -56,6 +317,8 @@ View PackagesPage() {
     const auto& inst_versions = store->selected_installed_versions.Get();
     const auto& plan_items = store->installed_plan_preview.Get();
     const bool loading_detail = store->loading_installed_detail.Get();
+    const auto& remove_plan_opt = store->selected_remove_plan.Get();
+    const bool loading_remove_plan = store->loading_remove_plan.Get();
 
     const std::string needle = detail::ToLowerCopy(filter_input.Get().text);
     const std::size_t mode = filter_mode.Get();
@@ -82,7 +345,7 @@ View PackagesPage() {
 
     View toolbar = Row {
         TextField(filter_input)
-            .Placeholder("筛选已安装软件包 (如 gcc, mcpp, gtk4)...")
+            .Placeholder("筛选已安装包...")
             .Variant(TextFieldVariant::Outlined)
             .LeadingIcon(icons::SearchIcon())
             .OnChanged([filter_input](const TextEditingValue& next) mutable { filter_input = next; })
@@ -94,6 +357,21 @@ View PackagesPage() {
         Chip("含异常", mode == 2)
             .OnChanged([filter_mode](bool) mutable { filter_mode = 2; }),
         ActionButton(
+            "批量清理",
+            ButtonTone::Secondary,
+            [dialog, store, tasks, toast] {
+                if (!store->has_scanned_expired.Get() && !store->scanning_expired.Get() && !store->skip_initial_refresh) {
+                    store->ScanExpiredVersions(tasks);
+                }
+                dialog.Show([store, tasks, toast](DialogContext ctx) {
+                    return BatchPruneDialogContent(ctx, store, tasks, toast);
+                });
+            },
+            true,
+            icons::TrashIcon(),
+            true
+        ),
+        ActionButton(
             "更新索引",
             ButtonTone::Secondary,
             [store, tasks, toast] { store->UpdatePackagesAsync(tasks, toast); },
@@ -102,8 +380,8 @@ View PackagesPage() {
             true
         ),
     }.With(
-        Padding(EdgeInsets::Symmetric(20.0F, 12.0F)),
-        Spacing(10.0F),
+        Padding(EdgeInsets::Symmetric(16.0F, 12.0F)),
+        Spacing(8.0F),
         Background(theme.colors.surface),
         CrossAlign(CrossAxisAlignment::Center)
     );
@@ -185,6 +463,29 @@ View PackagesPage() {
         const std::string plain_name = grp.name;
         const std::string active_ver = grp.active_version;
 
+        std::string cutoff_ver = active_ver;
+        if (cutoff_ver.empty() && grp.versions.size() > 1) {
+            for (const auto& v : grp.versions) {
+                if (!v.version.empty() &&
+                    (cutoff_ver.empty() || CompareVersionStrings(v.version, cutoff_ver) > 0)) {
+                    cutoff_ver = v.version;
+                }
+            }
+        }
+
+        const auto& raw_checked = checked_targets.Get();
+        std::vector<std::string> non_active_targets;
+        std::vector<std::string> selected_for_pkg;
+        for (const auto& v : grp.versions) {
+            if (!v.is_active && grp.versions.size() > 1) {
+                const std::string target_spec = detail::MakeTargetSpec(v.ns, v.name, v.version);
+                non_active_targets.push_back(target_spec);
+                if (detail::ContainsKey(raw_checked, target_spec)) {
+                    selected_for_pkg.push_back(target_spec);
+                }
+            }
+        }
+
         // Build version rows by combining list_installed_versions (has paths) & group.versions (has degraded status)
         std::vector<View> ver_rows;
         for (std::size_t i = 0; i < grp.versions.size(); ++i) {
@@ -197,68 +498,81 @@ View PackagesPage() {
                 }
             }
             const std::string full_target = detail::MakeTargetSpec(v.ns, v.name, v.version);
+            const bool selectable = !v.is_active && grp.versions.size() > 1;
+            const bool is_checked = selectable && detail::ContainsKey(selected_for_pkg, full_target);
 
             ver_rows.push_back(
-                Row {
-                    Column {
-                        Row {
-                            Text(v.version.empty() ? std::string("(default)") : v.version, TextRole::Body)
-                                .Style(TextStyle{
-                                    .font = Font::Monospace(13.5F).WithWeight(FontWeight::Bold),
-                                    .foreground = theme.colors.on_surface,
-                                }),
-                            v.is_active
-                                ? StatusBadge("当前活跃", sp.success, sp.success_bg)
-                                : (v.is_degraded
-                                       ? StatusBadge(v.status, sp.danger, sp.danger_bg)
-                                       : StatusBadge("未激活", theme.colors.on_surface_variant, sp.muted_bg)),
-                        }.With(Spacing(8.0F), CrossAlign(CrossAxisAlignment::Center)),
-                        path_str.empty()
-                            ? View{}
-                            : Text(path_str, TextRole::Label)
-                                  .Style(TextStyle{
-                                      .font = Font::Monospace(11.5F),
-                                      .foreground = theme.colors.on_surface_variant,
-                                  }),
-                    }.With(Spacing(4.0F), Grow(1.0F)),
-                    (!v.is_active && !v.version.empty())
-                        ? ActionButton(
-                              "设为活跃",
-                              ButtonTone::Secondary,
-                              [store, tasks, toast, plain_name, ver_str = v.version] {
-                                  store->ActivateVersionAsync(tasks, toast, plain_name, ver_str);
-                              },
-                              true,
-                              icons::CheckIcon(),
-                              true
-                          )
-                        : View{},
-                    ActionButton(
-                        "卸载",
-                        ButtonTone::Danger,
-                        [store, tasks, toast, dialog, full_target] {
-                            dialog.Show(
-                                "确认卸载软件包",
-                                "确定要卸载 `" + full_target + "` 吗？若存在反向依赖，xlings 将拒绝删除。",
-                                "卸载",
-                                "取消",
-                                [store, tasks, toast, full_target] {
-                                    store->RemovePackageAsync(tasks, toast, full_target);
-                                },
-                                {}
-                            );
-                        },
-                        true,
-                        icons::TrashIcon(),
-                        true
-                    ),
+                Column {
+                    Row {
+                        selectable
+                            ? View(
+                                  Checkbox(is_checked).OnChanged([checked_targets, full_target](bool checked) mutable {
+                                      checked_targets.Update([&](std::vector<std::string>& list) {
+                                          detail::SetKeyPresent(list, full_target, checked);
+                                      });
+                                  })
+                              )
+                            : View{},
+                        Text(v.version.empty() ? std::string("(default)") : v.version, TextRole::Body)
+                            .Style(TextStyle{
+                                .font = Font::Monospace(13.5F).WithWeight(FontWeight::Bold),
+                                .foreground = theme.colors.on_surface,
+                            })
+                            .With(Grow(1.0F)),
+                        v.is_active
+                            ? StatusBadge("当前活跃", sp.success, sp.success_bg)
+                            : (v.is_degraded
+                                   ? StatusBadge(v.status, sp.danger, sp.danger_bg)
+                                   : StatusBadge("未激活", theme.colors.on_surface_variant, sp.muted_bg)),
+                    }.With(Spacing(8.0F), CrossAlign(CrossAxisAlignment::Center)),
+                    path_str.empty()
+                        ? View{}
+                        : Text(path_str, TextRole::Label)
+                              .Style(TextStyle{
+                                  .font = Font::Monospace(11.5F),
+                                  .foreground = theme.colors.on_surface_variant,
+                              }),
+                    Row {
+                        Spacer{}.With(Grow(1.0F)),
+                        (!v.is_active && !v.version.empty())
+                            ? ActionButton(
+                                  "设为活跃",
+                                  ButtonTone::Secondary,
+                                  [store, tasks, toast, plain_name, ver_str = v.version] {
+                                      store->ActivateVersionAsync(tasks, toast, plain_name, ver_str);
+                                  },
+                                  true,
+                                  icons::CheckIcon(),
+                                  true
+                              )
+                            : View{},
+                        ActionButton(
+                            "卸载",
+                            ButtonTone::Danger,
+                            [store, tasks, toast, dialog, full_target] {
+                                dialog.Show(
+                                    "确认卸载软件包",
+                                    "确定要卸载 `" + full_target + "` 吗？若存在反向依赖，xlings 将拒绝删除。",
+                                    "卸载",
+                                    "取消",
+                                    [store, tasks, toast, full_target] {
+                                        store->RemovePackageAsync(tasks, toast, full_target);
+                                    },
+                                    {}
+                                );
+                            },
+                            true,
+                            icons::TrashIcon(),
+                            true
+                        ),
+                    }.With(Spacing(8.0F), CrossAlign(CrossAxisAlignment::Center)),
                 }.With(
                     Padding(12.0F),
-                    Spacing(8.0F),
+                    Spacing(6.0F),
                     Background(v.is_active ? sp.success_bg : sp.card_elevated_bg),
                     Border{v.is_active ? WithAlpha(sp.success, 0.35F) : sp.border_soft, 1.0F},
                     CornerRadius(10.0F),
-                    CrossAlign(CrossAxisAlignment::Center)
+                    CrossAlign(CrossAxisAlignment::Stretch)
                 ).Key("ver-" + full_target + "-" + std::to_string(i))
             );
         }
@@ -310,18 +624,30 @@ View PackagesPage() {
                             std::nullopt,
                             true
                         ),
-                        (grp.versions.size() > 1 && !active_ver.empty())
+                        (grp.versions.size() > 1 && !cutoff_ver.empty())
                             ? ActionButton(
-                                  "清理早于 " + active_ver + " 的旧版本",
+                                  "预演清理旧版",
                                   ButtonTone::Secondary,
-                                  [store, tasks, toast, dialog, plain_name, active_ver] {
+                                  [store, tasks, pkg_key = grp.key, cutoff_ver] {
+                                      store->PreviewSingleRemoveOlderThan(tasks, pkg_key, cutoff_ver);
+                                  },
+                                  true,
+                                  std::nullopt,
+                                  true
+                              )
+                            : View{},
+                        (grp.versions.size() > 1 && !cutoff_ver.empty())
+                            ? ActionButton(
+                                  "清理早于 " + cutoff_ver + " 的旧版本",
+                                  ButtonTone::Secondary,
+                                  [store, tasks, toast, dialog, pkg_key = grp.key, cutoff_ver] {
                                       dialog.Show(
                                           "清理旧版本",
-                                          "将移除所有早于 `" + active_ver + "` 且无其他包引用的 `" + plain_name + "` 旧版本。",
+                                          "将移除所有早于 `" + cutoff_ver + "` 且无其他包引用的 `" + pkg_key + "` 旧版本。",
                                           "确认清理",
                                           "取消",
-                                          [store, tasks, toast, plain_name, active_ver] {
-                                              store->RemovePackageAsync(tasks, toast, plain_name, active_ver, false);
+                                          [store, tasks, toast, pkg_key, cutoff_ver] {
+                                              store->RemovePackageAsync(tasks, toast, pkg_key, cutoff_ver, false);
                                           },
                                           {}
                                       );
@@ -336,6 +662,113 @@ View PackagesPage() {
             )
         );
 
+        if (loading_remove_plan) {
+            detail_sections.push_back(
+                Card(
+                    Row {
+                        ProgressCircle().With(Frame{.width = 16.0F, .height = 16.0F}),
+                        Text("正在预演清理计划...", TextRole::Body)
+                            .Style(TextStyle{.foreground = theme.colors.on_surface_variant}),
+                    }.With(Spacing(8.0F), CrossAlign(CrossAxisAlignment::Center))
+                )
+            );
+        } else if (remove_plan_opt.has_value()) {
+            const RemovePlan& rp = *remove_plan_opt;
+            std::vector<View> rp_rows;
+
+            if (rp.remove.empty() && rp.keep.empty()) {
+                rp_rows.push_back(
+                    Text("没有早于 " + rp.older_than + " 的可清理旧版本", TextRole::Label)
+                        .Style(TextStyle{.foreground = theme.colors.on_surface_variant})
+                );
+            } else {
+                for (std::size_t ri = 0; ri < rp.remove.size(); ++ri) {
+                    const auto& item = rp.remove[ri];
+                    rp_rows.push_back(
+                        Row {
+                            Text(item.version, TextRole::Body)
+                                .Style(TextStyle{
+                                    .font = Font::Monospace(12.5F),
+                                    .foreground = theme.colors.on_surface,
+                                })
+                                .With(Grow(1.0F)),
+                            StatusBadge(FormatBytes(item.bytes), sp.info, sp.info_bg),
+                        }.With(Spacing(8.0F), CrossAlign(CrossAxisAlignment::Center))
+                            .Key("rp-rem-" + item.version + "-" + std::to_string(ri))
+                    );
+                }
+                for (std::size_t ki = 0; ki < rp.keep.size(); ++ki) {
+                    const auto& k = rp.keep[ki];
+                    const std::string keep_txt = k.reason.empty() ? k.version : (k.version + " · " + k.reason);
+                    rp_rows.push_back(
+                        Row {
+                            StatusBadge("保留", sp.warning, sp.warning_bg),
+                            Text(keep_txt, TextRole::Label)
+                                .Style(TextStyle{.foreground = sp.warning})
+                                .With(Grow(1.0F)),
+                        }.With(Spacing(8.0F), CrossAlign(CrossAxisAlignment::Center))
+                            .Key("rp-keep-" + k.version + "-" + std::to_string(ki))
+                    );
+                }
+            }
+
+            detail_sections.push_back(
+                Card(
+                    Column {
+                        SectionHeader("过期版本清理预演 (早于 " + rp.older_than + ")"),
+                        rp.remove.empty()
+                            ? View{}
+                            : Flow {
+                                  StatusBadge(
+                                      "可移除 " + std::to_string(rp.remove.size()) + " 个 · 释放 " +
+                                          FormatBytes(rp.total_bytes),
+                                      sp.info,
+                                      sp.info_bg
+                                  ),
+                              }.With(Spacing(6.0F)),
+                        Column(std::move(rp_rows)).With(Spacing(6.0F), CrossAlign(CrossAxisAlignment::Stretch)),
+                        Flow {
+                            !rp.remove.empty()
+                                ? ActionButton(
+                                      "确认清理这 " + std::to_string(rp.remove.size()) + " 个旧版本",
+                                      ButtonTone::Danger,
+                                      [dialog, store, tasks, toast, pkg_key = grp.key, older = rp.older_than,
+                                       cnt = rp.remove.size(), total_bytes = rp.total_bytes] {
+                                          dialog.Show(
+                                              "确认清理过期版本",
+                                              "将移除 `" + pkg_key + "` 早于 `" + older + "` 的 " +
+                                                  std::to_string(cnt) + " 个旧版本，预计释放 " +
+                                                  FormatBytes(total_bytes) + "。",
+                                              "确认清理",
+                                              "取消",
+                                              [store, tasks, toast, pkg_key, older] {
+                                                  store->RemovePackageAsync(tasks, toast, pkg_key, older, false);
+                                              },
+                                              {}
+                                          );
+                                      },
+                                      !rp.older_than.empty(),
+                                      icons::TrashIcon(),
+                                      true
+                                  )
+                                : View{},
+                            ActionButton(
+                                "关闭预演",
+                                ButtonTone::Ghost,
+                                [store] { store->selected_remove_plan = std::optional<RemovePlan>{}; },
+                                true,
+                                std::nullopt,
+                                true
+                            ),
+                        }.With(Spacing(8.0F)),
+                    }.With(Spacing(10.0F), CrossAlign(CrossAxisAlignment::Stretch))
+                )
+            );
+        }
+
+        const bool all_non_active_selected =
+            !non_active_targets.empty() && selected_for_pkg.size() == non_active_targets.size();
+
         detail_sections.push_back(
             Card(
                 Column {
@@ -343,6 +776,49 @@ View PackagesPage() {
                         "已安装版本 (" + std::to_string(grp.versions.size()) + ")",
                         "点击“设为活跃”可即时切换当前 SubOS 中的默认命令指向"
                     ),
+                    !non_active_targets.empty()
+                        ? Flow {
+                              ActionButton(
+                                  all_non_active_selected
+                                      ? "取消全选"
+                                      : ("全选未激活 (" + std::to_string(non_active_targets.size()) + ")"),
+                                  ButtonTone::Secondary,
+                                  [checked_targets, non_active_targets, all_non_active_selected]() mutable {
+                                      if (all_non_active_selected) {
+                                          checked_targets = std::vector<std::string>{};
+                                      } else {
+                                          checked_targets = non_active_targets;
+                                      }
+                                  },
+                                  true,
+                                  icons::CheckIcon(),
+                                  true
+                              ),
+                              !selected_for_pkg.empty()
+                                  ? ActionButton(
+                                        "批量卸载已选 (" + std::to_string(selected_for_pkg.size()) + ")",
+                                        ButtonTone::Danger,
+                                        [dialog, store, tasks, toast, selected_for_pkg, checked_targets]() mutable {
+                                            dialog.Show(
+                                                "确认批量卸载",
+                                                "确定要卸载已选的 " + std::to_string(selected_for_pkg.size()) +
+                                                    " 个版本吗？若存在反向依赖，xlings 将拒绝删除相应版本。",
+                                                "批量卸载",
+                                                "取消",
+                                                [store, tasks, toast, selected_for_pkg, checked_targets]() mutable {
+                                                    checked_targets = std::vector<std::string>{};
+                                                    store->BatchRemoveTargetsAsync(tasks, toast, selected_for_pkg);
+                                                },
+                                                {}
+                                            );
+                                        },
+                                        true,
+                                        icons::TrashIcon(),
+                                        true
+                                    )
+                                  : View{},
+                          }.With(Spacing(8.0F))
+                        : View{},
                     Column(std::move(ver_rows)).With(Spacing(8.0F), CrossAlign(CrossAxisAlignment::Stretch)),
                 }.With(Spacing(12.0F), CrossAlign(CrossAxisAlignment::Stretch))
             )
@@ -445,7 +921,7 @@ View PackagesPage() {
 
         right_pane = ScrollView(
             Column(std::move(detail_sections))
-                .With(Padding(18.0F), Spacing(14.0F), CrossAlign(CrossAxisAlignment::Stretch))
+                .With(Padding(16.0F), Spacing(14.0F), CrossAlign(CrossAxisAlignment::Stretch))
         ).ScrollAxis(Axis::Vertical)
             .With(Grow(1.0F), ScrollBar{});
     }
@@ -453,7 +929,7 @@ View PackagesPage() {
     return Column {
         std::move(toolbar),
         Divider(),
-        ResizableSplit(std::move(left_pane), std::move(right_pane), 340.0F, 250.0F, 520.0F),
+        ResizableSplit(std::move(left_pane), std::move(right_pane), 280.0F, 220.0F, 480.0F),
     }.With(Grow(1.0F), CrossAlign(CrossAxisAlignment::Stretch));
 }
 

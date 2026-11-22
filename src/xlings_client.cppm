@@ -245,6 +245,15 @@ public:
         return RunInterface("remove_package", args, std::move(on_event), std::move(control));
     }
 
+    std::optional<RemovePlan> PlanRemoveOlderThan(
+        std::string_view target,
+        std::string_view older_than
+    ) const {
+        const CommandOutcome out = RemovePackage(target, older_than, true);
+        if (!out.ok) return std::nullopt;
+        return ParseRemovePlanEvents(out.events);
+    }
+
     CommandOutcome UpdatePackages(
         std::string_view target = {},
         EventCallback on_event = {},
