@@ -6,9 +6,9 @@
 version = 2
 
 [package."huxerui.huxerui"]
-version = "feat/build-system-contract-mcpp"
-source  = "git+https://github.com/Sunrisepeak/HuxerUI.git#branch=feat/build-system-contract-mcpp@e57d79f218fa30bc9728a381ff97f4e282e8f954"
-hash    = "fnv1a:f1239d1aefc06b27"
+version = "main"
+source  = "git+https://github.com/HuxerUI/HuxerUI.git#branch=main@d0675f713a9b95431104fc2b0f8b5839f513b9f0"
+hash    = "fnv1a:d43468d6e2eb165d"
 
 [package."mcpp.plugins"]
 namespace = "mcpp"

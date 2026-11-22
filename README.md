@@ -33,7 +33,7 @@ mcpp pack hxlings --release
 
 ## 说明
 
-- 当前基于 `mcpp 2026.11.21.1` 构建，并通过 Git 依赖接入尚未单独发版的 `HuxerUI` 0.5.0（`feat/build-system-contract-mcpp` 分支，完整支持新版 `mcpp` 构建契约与内建资源/插件打包）。
+- 当前基于 `mcpp 2026.11.21.1` 构建，并通过 Git 依赖接入官方 `HuxerUI/HuxerUI`（`main` 分支，0.5.0，已合入完整的新版 `mcpp` 构建契约与内建资源/插件打包支持）。
 - 当通过 `mcpp run` 启动时，进程环境中的 `XLINGS_HOME` 会指向 `mcpp` 自身的隔离目录（`~/.mcpp/registry`）。Hxlings 在解析并派生 `xlings` 子进程时会自动跳过 `~/.mcpp/registry`，确保始终管理用户的真实 `xlings` 环境（可通过 `HXLINGS_BIN` 环境变量显式覆盖 `xlings` 路径）。
 - 在 Linux Wayland + XWayland 会话中，为避免 `xim:gtk4@4.16.13` 在部分 Wayland 合成器下触发 `zwp_linux_dmabuf_feedback_v1` 初始化崩溃，当 `GDK_BACKEND` 未设置且同时存在 `WAYLAND_DISPLAY` 与 `DISPLAY` 时会默认回退到 `GDK_BACKEND=x11`；如需强制使用 Wayland，可显式运行 `GDK_BACKEND=wayland mcpp run`。
 

@@ -13,7 +13,7 @@ name = "Hxlings"
 id   = "io.github.farnaherry.hxlings"
 
 [dependencies.huxerui]
-huxerui = { git = "https://github.com/Sunrisepeak/HuxerUI.git", branch = "feat/build-system-contract-mcpp" }
+huxerui = { git = "https://github.com/HuxerUI/HuxerUI.git", branch = "main" }
 
 [dependencies.nlohmann]
 json = "3.12.0"
