@@ -126,15 +126,7 @@ jobs:
           test -d "$tar_top"
           for launcher in "$tar_top/hxlings" "$tar_top/run.sh"; do
             if [ -f "$launcher" ]; then
-              python3 -c '
-import pathlib, sys
-p = pathlib.Path(sys.argv[1])
-old = "--library-path \"$here/lib\""
-new = "--library-path \"$here/lib:/usr/lib/x86_64-linux-gnu:/usr/lib64:/lib/x86_64-linux-gnu:/lib64\""
-text = p.read_text()
-assert old in text, f"missing expected library-path flag in {p}"
-p.write_text(text.replace(old, new))
-' "$launcher"
+              python3 -c 'import pathlib, sys; p = pathlib.Path(sys.argv[1]); old = "--library-path \"$here/lib\""; new = "--library-path \"$here/lib:/usr/lib/x86_64-linux-gnu:/usr/lib64:/lib/x86_64-linux-gnu:/lib64\""; text = p.read_text(); assert old in text, f"missing expected library-path flag in {p}"; p.write_text(text.replace(old, new))' "$launcher"
               chmod +x "$launcher"
             fi
           done
