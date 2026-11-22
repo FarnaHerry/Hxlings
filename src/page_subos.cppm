@@ -459,12 +459,12 @@ View SubosPage() {
                 }.With(Spacing(6.0F), CrossAlign(CrossAxisAlignment::Stretch)),
                 14.0F
             ),
-            Tabs({"Shims 命令", "环境变量", "执行命令", "审计事件"}, tab_idx)
+            Tabs({"Shims", "环境变量", "执行命令", "审计事件"}, tab_idx)
                 .OnChanged([detail_tab](std::size_t idx) mutable { detail_tab = idx; }),
             Card(std::move(tab_content), 16.0F).With(Grow(1.0F)),
         }.With(
             Grow(1.0F),
-            Padding(18.0F),
+            Padding(16.0F),
             Spacing(12.0F),
             CrossAlign(CrossAxisAlignment::Stretch)
         );
@@ -473,7 +473,7 @@ View SubosPage() {
     return Column {
         std::move(toolbar),
         Divider(),
-        ResizableSplit(std::move(left_pane), std::move(right_pane), 340.0F, 260.0F, 480.0F),
+        ResizableSplit(std::move(left_pane), std::move(right_pane), 260.0F, 210.0F, 440.0F),
     }.With(Grow(1.0F), CrossAlign(CrossAxisAlignment::Stretch));
 }
 

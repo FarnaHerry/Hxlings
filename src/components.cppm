@@ -97,7 +97,6 @@ View ActionButton(
         .With(
             Padding(pad),
             Spacing(6.0F),
-            MainAlign(MainAxisAlignment::Center),
             CrossAlign(CrossAxisAlignment::Center),
             Background(effective_bg),
             Border{border_col, border_w},

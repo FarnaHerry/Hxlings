@@ -44,6 +44,8 @@ class XlingsStore : public std::enable_shared_from_this<XlingsStore> {
 public:
     XlingsStore() = default;
 
+    bool skip_initial_refresh = false;
+
     // UI Preferences
     State<bool> dark_mode{false};
     State<Color> brand_color{DefaultBrandColor()};

@@ -5,8 +5,65 @@ import huxerui.rules;
 int main() {
     if (!huxerui::rules::configure({})) return 1;
 
-    const std::string builtin_package =
-        std::string(mcpp::out_dir()) + "/hrc/builtin/package/huxerui/resources.bin";
-    mcpp::deploy(builtin_package.c_str(), "hxlings.resources/huxerui");
+    const std::string huxerui_root = mcpp::dep_dir("huxerui");
+    if (!huxerui_root.empty()) {
+        mcpp::include_dir_after((huxerui_root + "/src").c_str());
+        mcpp::source((huxerui_root + "/testing/ui_test.cpp").c_str());
+        mcpp::source((huxerui_root + "/testing/testing_platform_adapter.cpp").c_str());
+        mcpp::source((huxerui_root + "/testing/ui_snapshot.cpp").c_str());
+    }
+
+    const std::string hrc = huxerui::rules::host_tool("hrc");
+    const std::string sdk_root = huxerui::rules::sdk_root();
+    const std::filesystem::path builtin_src = std::filesystem::path(sdk_root) / "resources";
+    if (!hrc.empty() && std::filesystem::exists(builtin_src)) {
+        const std::string deploy_out = std::string(mcpp::out_dir()) + "/hrc/deploy";
+        const std::string pkg_root = deploy_out + "/package/huxerui";
+
+        mcpp::action a;
+        a.id = "hrc:deploy-payloads";
+        a.role = mcpp::roles::source;
+        a.description = "huxerui builtin resource payloads";
+        a.arg(hrc.c_str())
+            .arg("--root").arg(builtin_src.string().c_str())
+            .arg("--output").arg(deploy_out.c_str())
+            .arg("--namespace").arg("huxerui")
+            .arg("--header-name").arg("huxerui_builtin_resources.h");
+        a.input(hrc.c_str());
+
+        std::vector<std::pair<std::string, std::string>> deploys;
+        const std::string index_bin = pkg_root + "/resources.bin";
+        a.output(index_bin.c_str());
+        deploys.emplace_back(index_bin, "hxlings.resources/huxerui");
+
+        std::error_code ec;
+        for (auto it = std::filesystem::recursive_directory_iterator(builtin_src, ec);
+             it != std::filesystem::recursive_directory_iterator(); ++it) {
+            if (!it->is_regular_file(ec)) continue;
+            const auto path = it->path();
+            a.input(path.string().c_str());
+
+            const auto rel = std::filesystem::relative(path, builtin_src, ec);
+            if (ec) continue;
+            const std::string rel_generic = rel.generic_string();
+            if (rel_generic.starts_with("images/") && path.extension() == ".svg") {
+                const std::string stem = path.stem().string();
+                const std::string sub = rel.parent_path().generic_string();
+                const std::string out_file = pkg_root + "/huxerui/" + sub + "/" + stem + ".huxv";
+                a.output(out_file.c_str());
+                deploys.emplace_back(out_file, "hxlings.resources/huxerui/huxerui/" + sub);
+            } else if (rel_generic.starts_with("raw/")) {
+                const std::string sub = rel.parent_path().generic_string();
+                const std::string out_file = pkg_root + "/huxerui/" + rel_generic;
+                a.output(out_file.c_str());
+                deploys.emplace_back(out_file, "hxlings.resources/huxerui/huxerui/" + sub);
+            }
+        }
+        a.submit();
+
+        for (const auto& [from, to] : deploys) {
+            mcpp::deploy(from.c_str(), to.c_str());
+        }
+    }
     return 0;
 }

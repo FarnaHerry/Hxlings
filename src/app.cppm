@@ -97,7 +97,9 @@ View MainShell() {
     const StatusPalette sp = ResolveStatusPalette(theme);
 
     Lifecycle([store, tasks] {
-        store->RefreshAll(tasks);
+        if (!store->skip_initial_refresh) {
+            store->RefreshAll(tasks);
+        }
     });
 
     const std::size_t nav_idx = store->active_nav.Get();
@@ -273,7 +275,7 @@ View AppRoot() {
 
 } // namespace
 
-View App() {
+export View App() {
     return AppRoot();
 }
 
