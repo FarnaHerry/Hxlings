@@ -1,0 +1,5 @@
+target/
+compile_commands.json
+traces/
+.mcpp/
+dist/

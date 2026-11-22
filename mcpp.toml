@@ -1,0 +1,21 @@
+[package]
+name        = "hxlings"
+version     = "0.1.0"
+standard    = "c++23"
+description = "Desktop GUI manager for xlings built with mcpp and HuxerUI"
+license     = "MIT"
+repo        = "https://github.com/FarnaHerry/Hxlings"
+platforms   = ["linux", "windows", "macos"]
+
+[dependencies.huxerui]
+huxerui = "0.4.0"
+
+[dependencies.nlohmann]
+json = "3.12.0"
+
+[targets.hxlings]
+kind = "bin"
+main = "src/main.cpp"
+
+[build]
+sources = []

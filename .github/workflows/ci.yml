@@ -1,0 +1,274 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      package:
+        description: Build and upload platform release archives
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hxlings-ci-${{ github.workflow_ref }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  MCPP_VERSION: "2026.11.21.1"
+  MCPP_LLVM: "llvm@22.1.8"
+  XLINGS_NON_INTERACTIVE: "1"
+
+jobs:
+  linux:
+    name: linux-x86_64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache xlings and mcpp
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.xlings
+            ~/.mcpp
+          key: hxlings-${{ runner.os }}-${{ runner.arch }}-v1-${{ env.MCPP_VERSION }}-${{ env.MCPP_LLVM }}-${{ hashFiles('mcpp.toml', 'mcpp.lock') }}
+          restore-keys: |
+            hxlings-${{ runner.os }}-${{ runner.arch }}-v1-${{ env.MCPP_VERSION }}-${{ env.MCPP_LLVM }}-
+            hxlings-${{ runner.os }}-${{ runner.arch }}-v1-${{ env.MCPP_VERSION }}-
+            hxlings-${{ runner.os }}-${{ runner.arch }}-v1-
+
+      - name: Install xlings
+        run: |
+          if [ ! -x "$HOME/.xlings/bin/xlings" ] && [ ! -x "$HOME/.xlings/subos/current/bin/xlings" ]; then
+            curl -fsSL https://d2learn.org/xlings-install.sh | bash
+          fi
+          echo "$HOME/.xlings/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.xlings/subos/current/bin" >> "$GITHUB_PATH"
+
+      - name: Install pinned mcpp
+        run: |
+          archive="mcpp-${MCPP_VERSION}-linux-x86_64.tar.gz"
+          root="$RUNNER_TEMP/mcpp-${MCPP_VERSION}-linux-x86_64"
+          mkdir -p "$RUNNER_TEMP" "$HOME/.mcpp/registry"
+          curl -L -fsS --retry 5 --retry-all-errors --retry-delay 10 \
+            -o "$RUNNER_TEMP/$archive" \
+            "https://github.com/mcpp-community/mcpp/releases/download/v${MCPP_VERSION}/${archive}"
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP"
+          cp -a "$root/registry/." "$HOME/.mcpp/registry/"
+          echo "MCPP_HOME=$HOME/.mcpp" >> "$GITHUB_ENV"
+          echo "$root/bin" >> "$GITHUB_PATH"
+
+      - name: Select Clang toolchain
+        run: |
+          mcpp --version
+          mcpp toolchain install "${MCPP_LLVM}"
+          mcpp toolchain default "${MCPP_LLVM}"
+          mcpp toolchain list
+
+      - name: Verify xlings CLI
+        run: |
+          xlings interface --version
+          xlings interface env
+
+      - name: Build (dev)
+        run: |
+          mcpp build
+          bin=$(find target -type f -name hxlings | head -1)
+          res=$(find target -path '*hxlings.resources/huxerui/resources.bin' | head -1)
+          test -x "$bin"
+          test -s "$res"
+          echo "built $bin with $res"
+
+      - name: Run tests
+        run: mcpp test
+
+      - name: Package release archive
+        if: inputs.package || github.event_name != 'pull_request'
+        run: |
+          mkdir -p dist
+          mcpp pack hxlings --release --pkg-format tar --output dist/hxlings-linux-x86_64.tar.gz
+          test -s dist/hxlings-linux-x86_64.tar.gz
+          tar -tzf dist/hxlings-linux-x86_64.tar.gz | grep -q 'hxlings.resources/huxerui/resources.bin'
+
+      - name: Upload release archive
+        if: inputs.package || github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: hxlings-linux-x86_64
+          path: dist/hxlings-linux-x86_64.tar.gz
+          if-no-files-found: error
+
+  macos:
+    name: macos-arm64
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache xlings and mcpp
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.xlings
+            ~/.mcpp
+          key: hxlings-${{ runner.os }}-${{ runner.arch }}-v1-${{ env.MCPP_VERSION }}-${{ hashFiles('mcpp.toml', 'mcpp.lock') }}
+          restore-keys: |
+            hxlings-${{ runner.os }}-${{ runner.arch }}-v1-${{ env.MCPP_VERSION }}-
+            hxlings-${{ runner.os }}-${{ runner.arch }}-v1-
+
+      - name: Install xlings
+        run: |
+          if [ ! -x "$HOME/.xlings/bin/xlings" ] && [ ! -x "$HOME/.xlings/subos/current/bin/xlings" ]; then
+            curl -fsSL https://d2learn.org/xlings-install.sh | bash
+          fi
+          echo "$HOME/.xlings/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.xlings/subos/current/bin" >> "$GITHUB_PATH"
+
+      - name: Install pinned mcpp
+        run: |
+          archive="mcpp-${MCPP_VERSION}-macosx-arm64.tar.gz"
+          root="$RUNNER_TEMP/mcpp-${MCPP_VERSION}-macosx-arm64"
+          mkdir -p "$RUNNER_TEMP" "$HOME/.mcpp/registry"
+          curl -L -fsS --retry 5 --retry-all-errors --retry-delay 10 \
+            -o "$RUNNER_TEMP/$archive" \
+            "https://github.com/mcpp-community/mcpp/releases/download/v${MCPP_VERSION}/${archive}"
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP"
+          cp -R "$root/registry/." "$HOME/.mcpp/registry/"
+          echo "MCPP_HOME=$HOME/.mcpp" >> "$GITHUB_ENV"
+          echo "$root/bin" >> "$GITHUB_PATH"
+
+      - name: Verify mcpp and xlings
+        run: |
+          mcpp --version
+          xlings interface --version
+          xlings interface env
+
+      - name: Build (dev)
+        run: |
+          mcpp build
+          bin=$(find target -type f -name hxlings | head -1)
+          res=$(find target -path '*hxlings.resources/huxerui/resources.bin' | head -1)
+          test -x "$bin"
+          test -s "$res"
+          echo "built $bin with $res"
+
+      - name: Run tests
+        run: mcpp test
+
+      - name: Package release archive
+        if: inputs.package || github.event_name != 'pull_request'
+        run: |
+          mkdir -p dist
+          mcpp pack hxlings --release --pkg-format tar --output dist/hxlings-macos-arm64.tar.gz
+          test -s dist/hxlings-macos-arm64.tar.gz
+          tar -tzf dist/hxlings-macos-arm64.tar.gz | grep -q 'hxlings.resources/huxerui/resources.bin'
+
+      - name: Upload release archive
+        if: inputs.package || github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: hxlings-macos-arm64
+          path: dist/hxlings-macos-arm64.tar.gz
+          if-no-files-found: error
+
+  windows:
+    name: windows-x86_64
+    # Pinned to windows-2022: windows-latest MSVC STL 14.51 breaks huxerui under Clang
+    # (std::_Find_vectorized static_assert on NodeExtensionHandle).
+    runs-on: windows-2022
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Cache xlings and mcpp
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.xlings
+            ~/.mcpp
+          key: hxlings-${{ runner.os }}-${{ runner.arch }}-v1-${{ env.MCPP_VERSION }}-${{ hashFiles('mcpp.toml', 'mcpp.lock') }}
+          restore-keys: |
+            hxlings-${{ runner.os }}-${{ runner.arch }}-v1-${{ env.MCPP_VERSION }}-
+            hxlings-${{ runner.os }}-${{ runner.arch }}-v1-
+
+      - name: Install xlings
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Test-Path "$HOME\.xlings\bin\xlings.exe") -and -not (Test-Path "$HOME\.xlings\subos\current\bin\xlings.exe")) {
+            irm https://d2learn.org/xlings-install.ps1.txt | iex
+          }
+          "$HOME\.xlings\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          "$HOME\.xlings\subos\current\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+      - name: Install pinned mcpp
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $archive = "mcpp-$($env:MCPP_VERSION)-windows-x86_64.zip"
+          $zipPath = Join-Path $env:RUNNER_TEMP $archive
+          $root = Join-Path $env:RUNNER_TEMP "mcpp-$($env:MCPP_VERSION)-windows-x86_64"
+          $mcppHome = Join-Path $HOME ".mcpp"
+          $regDest = Join-Path $mcppHome "registry"
+          New-Item -ItemType Directory -Path $regDest -Force | Out-Null
+          curl.exe -L -fsS --retry 5 --retry-all-errors --retry-delay 10 -o $zipPath "https://github.com/mcpp-community/mcpp/releases/download/v$($env:MCPP_VERSION)/$archive"
+          Expand-Archive -Force -Path $zipPath -DestinationPath $env:RUNNER_TEMP
+          Copy-Item -Path (Join-Path $root "registry\*") -Destination $regDest -Recurse -Force
+          "MCPP_HOME=$mcppHome" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          (Join-Path $root "bin") | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+      - name: Verify mcpp and xlings
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          mcpp --version
+          xlings interface --version
+          xlings interface env
+
+      - name: Build (dev)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          mcpp build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $exe = Get-ChildItem -Path target -Recurse -Filter 'hxlings.exe' | Select-Object -First 1
+          if (-not $exe) { throw 'hxlings.exe not found' }
+          $res = Join-Path $exe.Directory.FullName 'hxlings.resources\huxerui\resources.bin'
+          if (-not (Test-Path $res)) { throw "missing $res" }
+          Write-Host "built $($exe.FullName) with $res"
+
+      - name: Run tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          mcpp test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Package release archive
+        if: inputs.package || github.event_name != 'pull_request'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Path dist -Force | Out-Null
+          mcpp pack hxlings --release --pkg-format zip --output dist/hxlings-windows-x86_64.zip
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not (Test-Path 'dist/hxlings-windows-x86_64.zip')) { throw 'missing packed zip' }
+
+      - name: Upload release archive
+        if: inputs.package || github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: hxlings-windows-x86_64
+          path: dist/hxlings-windows-x86_64.zip
+          if-no-files-found: error

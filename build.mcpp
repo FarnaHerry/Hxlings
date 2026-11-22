@@ -1,0 +1,12 @@
+import std;
+import mcpp;
+import huxerui.rules;
+
+int main() {
+    if (!huxerui::rules::configure({})) return 1;
+
+    const std::string builtin_package =
+        std::string(mcpp::out_dir()) + "/hrc/builtin/package/huxerui/resources.bin";
+    mcpp::deploy(builtin_package.c_str(), "hxlings.resources/huxerui");
+    return 0;
+}
