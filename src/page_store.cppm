@@ -23,14 +23,35 @@ View StorePage() {
     auto query_input = UseState(TextEditingValue::FromText(""));
     auto selected_category = UseState(std::string{});
     auto chosen_version = UseState(std::string{});
+    auto chosen_version_pkg = UseState(std::string{});
     auto chosen_subos = UseState(std::string{});
     auto opt_activate = UseState(true);
     auto opt_global = UseState(false);
     auto opt_reconfig = UseState(false);
+    auto display_limit = UseState(std::size_t{60});
+    const ViewHandle search_handle = UseViewHandle();
+
+    Lifecycle([store, tasks] {
+        if (store->active_nav.Get() == 2 &&
+            !store->skip_initial_refresh &&
+            !store->has_searched.Get() &&
+            !store->searching.Get()) {
+            store->RunSearch(tasks, "", "");
+        }
+    }, store->active_nav.Get());
+
+    Lifecycle([store, tasks, search_handle] {
+        if (store->focus_search_nonce.Get() > 0 && store->active_nav.Get() == 2) {
+            tasks.Post([search_handle] {
+                (void)search_handle.RequestFocus(true);
+            });
+        }
+    }, store->focus_search_nonce.Get());
 
     const auto& results = store->search_results.Get();
     const bool searching = store->searching.Get();
     const bool has_searched = store->has_searched.Get();
+    const std::string& search_error = store->search_error.Get();
     const std::string selected_pkg = store->selected_store_pkg.Get();
     const auto& detail_opt = store->selected_store_detail.Get();
     const bool loading_detail = store->loading_store_detail.Get();
@@ -40,8 +61,9 @@ View StorePage() {
 
     const std::string cur_cat = selected_category.Get();
 
-    auto trigger_search = [store, tasks, query_input, selected_category](std::string override_kw = {}) {
+    auto trigger_search = [store, tasks, query_input, selected_category, display_limit](std::string override_kw = {}) mutable {
         const std::string kw = override_kw.empty() ? query_input.Get().text : override_kw;
+        display_limit = std::size_t{60};
         store->RunSearch(tasks, kw, selected_category.Get());
     };
 
@@ -59,11 +81,10 @@ View StorePage() {
     for (const auto& [cat_id, cat_label] : categories) {
         const bool active = cur_cat == cat_id;
         cat_chips.push_back(
-            Chip(cat_label, active).OnChanged([store, tasks, query_input, selected_category, cat_id](bool) mutable {
+            Chip(cat_label, active).OnChanged([store, tasks, query_input, selected_category, display_limit, cat_id](bool) mutable {
                 selected_category = cat_id;
-                if (!query_input.Get().text.empty() || !cat_id.empty()) {
-                    store->RunSearch(tasks, query_input.Get().text, cat_id);
-                }
+                display_limit = std::size_t{60};
+                store->RunSearch(tasks, query_input.Get().text, cat_id);
             }).Key("cat-" + (cat_id.empty() ? std::string("all") : cat_id))
         );
     }
@@ -77,8 +98,9 @@ View StorePage() {
             ActionButton(
                 kw,
                 ButtonTone::Ghost,
-                [store, tasks, query_input, selected_category, kw]() mutable {
+                [store, tasks, query_input, selected_category, display_limit, kw]() mutable {
                     query_input = TextEditingValue::FromText(kw);
+                    display_limit = std::size_t{60};
                     store->RunSearch(tasks, kw, selected_category.Get());
                 },
                 true,
@@ -95,12 +117,27 @@ View StorePage() {
                 .Variant(TextFieldVariant::Outlined)
                 .LeadingIcon(icons::SearchIcon())
                 .OnChanged([query_input](const TextEditingValue& next) mutable { query_input = next; })
-                .OnSubmitted([trigger_search] { trigger_search(); })
-                .With(Grow(1.0F)),
+                .OnSubmitted([trigger_search]() mutable { trigger_search(); })
+                .With(Grow(1.0F), search_handle)
+                .Key("store-search-input"),
+            !query_input.Get().text.empty()
+                ? ActionButton(
+                      "清空",
+                      ButtonTone::Ghost,
+                      [store, tasks, query_input, selected_category, display_limit]() mutable {
+                          query_input = TextEditingValue::FromText("");
+                          display_limit = std::size_t{60};
+                          store->RunSearch(tasks, "", selected_category.Get());
+                      },
+                      true,
+                      std::nullopt,
+                      false
+                  ).Key("store-search-clear")
+                : View{},
             ActionButton(
                 searching ? "搜索中..." : "搜索",
                 ButtonTone::Primary,
-                [trigger_search] { trigger_search(); },
+                [trigger_search]() mutable { trigger_search(); },
                 !searching,
                 icons::SearchIcon(),
                 false
@@ -119,9 +156,27 @@ View StorePage() {
         CrossAlign(CrossAxisAlignment::Stretch)
     );
 
+    const std::size_t visible_count = std::min(results.size(), display_limit.Get());
     std::vector<View> result_rows;
-    result_rows.reserve(results.size());
-    for (std::size_t i = 0; i < results.size(); ++i) {
+    result_rows.reserve(visible_count + 2);
+    if (!results.empty()) {
+        const std::string summary =
+            results.size() > visible_count
+                ? ("已显示 " + std::to_string(visible_count) + " / " + std::to_string(results.size()) + " 个软件包")
+                : ("共 " + std::to_string(results.size()) + " 个软件包");
+        result_rows.push_back(
+            Row {
+                Text(summary, TextRole::Label)
+                    .Style(TextStyle{.font = Font::System(12.0F), .foreground = theme.colors.on_surface_variant})
+                    .With(Grow(1.0F)),
+                !cur_cat.empty()
+                    ? StatusBadge(cur_cat, sp.info, sp.info_bg)
+                    : View{},
+            }.With(Spacing(6.0F), CrossAlign(CrossAxisAlignment::Center))
+                .Key("store-results-header")
+        );
+    }
+    for (std::size_t i = 0; i < visible_count; ++i) {
         const auto& pkg = results[i];
         const bool is_sel = pkg.package == selected_pkg;
         const PkgGroup* installed_match = nullptr;
@@ -178,11 +233,26 @@ View StorePage() {
                 PointerCursor(PointerCursorKind::Hand),
                 CrossAlign(CrossAxisAlignment::Stretch)
             )
-            .OnClick([store, tasks, chosen_version, pkg_id = pkg.package]() mutable {
+            .OnClick([store, tasks, chosen_version, chosen_version_pkg, pkg_id = pkg.package]() mutable {
                 chosen_version = std::string{};
+                chosen_version_pkg = pkg_id;
                 store->LoadStoreDetail(tasks, pkg_id);
             })
             .Key("search-" + pkg.package + "-" + std::to_string(i))
+        );
+    }
+    if (results.size() > visible_count) {
+        result_rows.push_back(
+            ActionButton(
+                "显示更多 (剩余 " + std::to_string(results.size() - visible_count) + " 个)",
+                ButtonTone::Secondary,
+                [display_limit]() mutable {
+                    display_limit = display_limit.Get() + std::size_t{60};
+                },
+                true,
+                std::nullopt,
+                false
+            ).Key("store-load-more")
         );
     }
 
@@ -198,11 +268,60 @@ View StorePage() {
             MainAlign(MainAxisAlignment::Center),
             CrossAlign(CrossAxisAlignment::Center)
         );
+    } else if (!search_error.empty()) {
+        left_pane = Column {
+            EmptyState(icons::WarningIcon(), "搜索软件包失败", search_error),
+            Row {
+                ActionButton(
+                    "重试搜索",
+                    ButtonTone::Primary,
+                    [trigger_search]() mutable { trigger_search(); },
+                    true,
+                    icons::RefreshIcon(),
+                    true
+                ),
+                ActionButton(
+                    "同步索引",
+                    ButtonTone::Secondary,
+                    [store, tasks, toast = UseToast()] { store->UpdatePackagesAsync(tasks, toast); },
+                    true,
+                    std::nullopt,
+                    true
+                ),
+            }.With(Spacing(8.0F), MainAlign(MainAxisAlignment::Center)),
+        }.With(
+            Grow(1.0F),
+            Padding(16.0F),
+            Spacing(10.0F),
+            MainAlign(MainAxisAlignment::Center),
+            CrossAlign(CrossAxisAlignment::Center)
+        );
     } else if (results.empty()) {
-        left_pane = EmptyState(
-            icons::StoreIcon(),
-            has_searched ? "未找到匹配的软件包" : "探索 xlings 软件库",
-            has_searched ? "请尝试更短的关键词或更换类别过滤" : "输入关键词或点击上方热门标签检索可安装的工具链与库"
+        left_pane = Column {
+            EmptyState(
+                icons::StoreIcon(),
+                has_searched ? "未找到匹配的软件包" : "探索 xlings 软件库",
+                has_searched ? "请尝试更短的关键词或更换类别过滤" : "输入关键词或点击上方热门标签检索可安装的工具链与库"
+            ),
+            ActionButton(
+                "浏览全部软件包",
+                ButtonTone::Secondary,
+                [store, tasks, query_input, selected_category, display_limit]() mutable {
+                    query_input = TextEditingValue::FromText("");
+                    selected_category = std::string{};
+                    display_limit = std::size_t{60};
+                    store->RunSearch(tasks, "", "");
+                },
+                true,
+                icons::StoreIcon(),
+                true
+            ).Key("store-browse-all"),
+        }.With(
+            Grow(1.0F),
+            Padding(16.0F),
+            Spacing(6.0F),
+            MainAlign(MainAxisAlignment::Center),
+            CrossAlign(CrossAxisAlignment::Center)
         );
     } else {
         left_pane = ScrollView(
@@ -213,7 +332,18 @@ View StorePage() {
     }
 
     View right_pane = View{};
-    if (selected_pkg.empty() || !detail_opt.has_value()) {
+    if (!selected_pkg.empty() && loading_detail && !detail_opt.has_value()) {
+        right_pane = Column {
+            ProgressCircle().With(Frame{.width = 28.0F, .height = 28.0F}),
+            Text("正在加载 " + selected_pkg + " 详情...", TextRole::Body)
+                .Style(TextStyle{.foreground = theme.colors.on_surface_variant}),
+        }.With(
+            Grow(1.0F),
+            Spacing(12.0F),
+            MainAlign(MainAxisAlignment::Center),
+            CrossAlign(CrossAxisAlignment::Center)
+        );
+    } else if (selected_pkg.empty() || !detail_opt.has_value()) {
         right_pane = EmptyState(
             icons::StoreIcon(),
             "选择一个搜索结果查看详情",
@@ -232,7 +362,8 @@ View StorePage() {
             ver_options.push_back(d.selected_version.empty() ? std::string("latest") : d.selected_version);
         }
 
-        const std::string cur_ver_choice = chosen_version.Get();
+        const std::string cur_ver_choice =
+            (chosen_version_pkg.Get() == selected_pkg) ? chosen_version.Get() : std::string{};
         std::size_t ver_idx = 0;
         const std::string effective_ver = cur_ver_choice.empty() ? d.selected_version : cur_ver_choice;
         for (std::size_t i = 0; i < ver_options.size(); ++i) {
@@ -314,8 +445,11 @@ View StorePage() {
                     Row {
                         Select(ver_options, ver_idx, [](const std::string& v) { return Text(v); })
                             .Label("选择版本")
-                            .OnChanged([chosen_version, ver_options](std::size_t idx) mutable {
-                                if (idx < ver_options.size()) chosen_version = ver_options[idx];
+                            .OnChanged([chosen_version, chosen_version_pkg, ver_options, selected_pkg](std::size_t idx) mutable {
+                                if (idx < ver_options.size()) {
+                                    chosen_version = ver_options[idx];
+                                    chosen_version_pkg = selected_pkg;
+                                }
                             })
                             .With(Grow(1.0F)),
                         Select(subos_options, subos_idx, [](const std::string& s) { return Text(s); })

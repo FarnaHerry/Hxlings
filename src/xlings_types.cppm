@@ -332,4 +332,12 @@ struct CommandOutcome {
     bool operator==(const CommandOutcome&) const = default;
 };
 
+struct SearchOutcome {
+    std::vector<SearchPkg> packages;
+    bool ok = true;
+    std::string error_message;
+
+    bool operator==(const SearchOutcome&) const = default;
+};
+
 } // namespace hxlings

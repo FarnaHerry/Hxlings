@@ -81,10 +81,16 @@ public:
     State<std::vector<SearchPkg>> search_results{std::vector<SearchPkg>{}};
     State<bool> searching{false};
     State<bool> has_searched{false};
+    State<std::string> search_error{std::string{}};
     State<std::string> selected_store_pkg{std::string{}};
     State<std::optional<PackageDetail>> selected_store_detail{std::optional<PackageDetail>{}};
     State<bool> loading_store_detail{false};
     State<std::vector<InstallPlanItem>> store_plan_preview{std::vector<InstallPlanItem>{}};
+
+    // Shortcut & Focus Requests
+    State<std::uint64_t> focus_search_nonce{0};
+    State<std::uint64_t> open_batch_update_nonce{0};
+    State<std::uint64_t> open_batch_cleanup_nonce{0};
 
     // SubOS
     State<std::vector<SubosEntry>> subos_list{std::vector<SubosEntry>{}};
@@ -240,17 +246,39 @@ public:
         });
     }
 
+    void RequestFocusSearch() {
+        focus_search_nonce = focus_search_nonce.Get() + 1;
+    }
+
+    void RequestOpenBatchUpdate() {
+        active_nav = 1;
+        open_batch_update_nonce = open_batch_update_nonce.Get() + 1;
+    }
+
+    void RequestOpenBatchCleanup() {
+        active_nav = 1;
+        open_batch_cleanup_nonce = open_batch_cleanup_nonce.Get() + 1;
+    }
+
     void RunSearch(TaskScope tasks, std::string keyword, std::string category = {}) {
+        keyword = TrimWhitespace(keyword);
+        category = TrimWhitespace(category);
+        const std::uint64_t seq = ++search_seq_;
         searching = true;
         has_searched = true;
+        search_error = std::string{};
 
         auto self = shared_from_this();
         const XlingsClient client = client_;
-        tasks.Launch([self, tasks, client, keyword = std::move(keyword), category = std::move(category)]() -> Task<void> {
-            auto results = co_await RunWorker([client, keyword, category]() {
-                return client.SearchPackages(keyword, category);
+        tasks.Launch([self, tasks, client, seq, keyword = std::move(keyword), category = std::move(category)]() -> Task<void> {
+            auto outcome = co_await RunWorker([client, keyword, category]() {
+                return client.SearchPackagesChecked(keyword, category);
             });
-            self->search_results = std::move(results);
+            if (self->search_seq_.load(std::memory_order_acquire) != seq) {
+                co_return;
+            }
+            self->search_results = std::move(outcome.packages);
+            self->search_error = outcome.ok ? std::string{} : std::move(outcome.error_message);
             self->searching = false;
 
             const auto& res = self->search_results.Get();
@@ -1202,6 +1230,7 @@ private:
 
     XlingsClient client_;
     std::shared_ptr<ActiveProcessControl> active_process_;
+    std::atomic<std::uint64_t> search_seq_{0};
 };
 
 } // namespace hxlings

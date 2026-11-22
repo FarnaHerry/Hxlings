@@ -290,4 +290,25 @@ VectorAsset DownloadIcon() {
     });
 }
 
+VectorAsset KeyboardIcon() {
+    return VectorAsset::Create({24.0F, 24.0F}, [](VectorBuilder& b) {
+        const auto w = Color::White();
+        const auto st = detail::RoundStroke(1.8F);
+        b.StrokePath(Path::RoundedRect({2.5F, 5.5F, 19.0F, 13.0F}, CornerRadii{2.5F}), w, st);
+        for (const float x : {6.0F, 10.0F, 14.0F, 18.0F}) {
+            Path k1;
+            k1.MoveTo({x - 0.8F, 9.5F}).LineTo({x + 0.8F, 9.5F});
+            b.StrokePath(k1, w, st);
+        }
+        for (const float x : {6.0F, 10.0F, 14.0F, 18.0F}) {
+            Path k2;
+            k2.MoveTo({x - 0.8F, 12.5F}).LineTo({x + 0.8F, 12.5F});
+            b.StrokePath(k2, w, st);
+        }
+        Path space;
+        space.MoveTo({7.5F, 15.5F}).LineTo({16.5F, 15.5F});
+        b.StrokePath(space, w, st);
+    });
+}
+
 } // namespace hxlings::icons

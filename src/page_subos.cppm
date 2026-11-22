@@ -129,6 +129,15 @@ View SubosPage() {
     auto exec_cmd = UseState(TextEditingValue::FromText("xlings --version"));
     auto exec_sandbox = UseState(false);
     auto event_kind = UseState(std::string{});
+    const ViewHandle shim_filter_handle = UseViewHandle();
+
+    Lifecycle([store, tasks, shim_filter_handle] {
+        if (store->focus_search_nonce.Get() > 0 && store->active_nav.Get() == 3) {
+            tasks.Post([shim_filter_handle] {
+                (void)shim_filter_handle.RequestFocus(true);
+            });
+        }
+    }, store->focus_search_nonce.Get());
 
     const auto& suboses = store->subos_list.Get();
     const std::string selected_name = store->selected_subos.Get();
@@ -310,7 +319,7 @@ View SubosPage() {
                             .Variant(TextFieldVariant::Outlined)
                             .LeadingIcon(icons::SearchIcon())
                             .OnChanged([shim_filter](const TextEditingValue& v) mutable { shim_filter = v; })
-                            .With(Grow(1.0F)),
+                            .With(Grow(1.0F), shim_filter_handle),
                         StatusBadge("共 " + std::to_string(shims.size()) + " 个", sp.info, sp.info_bg),
                     }.With(Spacing(10.0F), CrossAlign(CrossAxisAlignment::Center)),
                     Text("点击任意命令可复制到剪贴板", TextRole::Label)

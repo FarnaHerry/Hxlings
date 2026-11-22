@@ -585,6 +585,41 @@ View PackagesPage() {
     auto filter_input = UseState(TextEditingValue::FromText(""));
     auto filter_mode = UseState<std::size_t>(0); // 0=all, 1=multi-version, 2=degraded
     auto checked_targets = UseState(std::vector<std::string>{});
+    const ViewHandle filter_handle = UseViewHandle();
+
+    Lifecycle([store, tasks, filter_handle] {
+        if (store->focus_search_nonce.Get() > 0 && store->active_nav.Get() == 1) {
+            tasks.Post([filter_handle] {
+                (void)filter_handle.RequestFocus(true);
+            });
+        }
+    }, store->focus_search_nonce.Get());
+
+    Lifecycle([store, tasks, dialog, toast] {
+        if (store->open_batch_update_nonce.Get() > 0) {
+            tasks.Post([store, tasks, dialog, toast] {
+                if (!store->has_scanned_updates.Get() && !store->scanning_updates.Get() && !store->skip_initial_refresh) {
+                    store->ScanUpdatablePackages(tasks);
+                }
+                dialog.Show([store, tasks, toast](DialogContext ctx) {
+                    return BatchUpdateDialogContent(ctx, store, tasks, toast);
+                });
+            });
+        }
+    }, store->open_batch_update_nonce.Get());
+
+    Lifecycle([store, tasks, dialog, toast] {
+        if (store->open_batch_cleanup_nonce.Get() > 0) {
+            tasks.Post([store, tasks, dialog, toast] {
+                if (!store->has_scanned_expired.Get() && !store->scanning_expired.Get() && !store->skip_initial_refresh) {
+                    store->ScanExpiredVersions(tasks);
+                }
+                dialog.Show([store, tasks, toast](DialogContext ctx) {
+                    return BatchPruneDialogContent(ctx, store, tasks, toast);
+                });
+            });
+        }
+    }, store->open_batch_cleanup_nonce.Get());
 
     const auto& all_groups = store->installed_groups.Get();
     const std::string selected_key = store->selected_installed_key.Get();
@@ -625,7 +660,8 @@ View PackagesPage() {
                 .Variant(TextFieldVariant::Outlined)
                 .LeadingIcon(icons::SearchIcon())
                 .OnChanged([filter_input](const TextEditingValue& next) mutable { filter_input = next; })
-                .With(Grow(1.0F)),
+                .With(Grow(1.0F), filter_handle)
+                .Key("packages-filter-input"),
             ActionButton(
                 "批量更新",
                 ButtonTone::Primary,

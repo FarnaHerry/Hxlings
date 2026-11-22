@@ -315,6 +315,51 @@ void TestParsePayloadStatusAndUpdatablePlans() {
           "BuildUpdatablePlans places skipped unindexed error last with first-line reason");
 }
 
+void TestWhitespaceAndSearchNormalization() {
+    Check(TrimWhitespace("  \t gcc \r\n ") == "gcc", "TrimWhitespace trims tabs/spaces/newlines");
+    Check(TrimWhitespace("   ").empty(), "TrimWhitespace empty when blank");
+
+    const std::string multiline_raw =
+        "{\"dataKind\":\"packages\",\"kind\":\"data\",\"payload\":[{"
+        "\"archs\":[],\"categories\":[],\"description\":\"   Line one\\n    line two\\t\\tline three   \","
+        "\"index\":\"awesome\",\"keywords\":[],\"name\":\"awesome\",\"namespace\":\"awesome\","
+        "\"package\":\"awesome:awesome\",\"status\":\"dev\",\"version\":\"latest\"}]}\n";
+    const auto pkgs = ParseSearchPackagesEvents(ParseNdjsonLines(multiline_raw));
+    Check(pkgs.size() == 1 && pkgs[0].description == "Line one line two line three",
+          "ParseSearchPackagesEvents normalizes multiline descriptions");
+
+    const std::string info_raw =
+        "{\"dataKind\":\"info_panel\",\"kind\":\"data\",\"payload\":{"
+        "\"package\":{\"description\":\"  First\\r\\n  second  \",\"name\":\"awesome\",\"namespace\":\"awesome\",\"package\":\"awesome:awesome\"},"
+        "\"title\":\"awesome:awesome\"}}\n";
+    const auto detail = ParsePackageInfoEvents(ParseNdjsonLines(info_raw));
+    Check(detail.description == "First second", "ParsePackageInfoEvents normalizes multiline description");
+}
+
+void TestProcessStreamingAndCancel() {
+    const std::string bin = ResolveXlingsBinary();
+    Check(!bin.empty(), "ResolveXlingsBinary returns non-empty path");
+
+    std::vector<std::string> streamed_lines;
+    const ProcessResult ver = RunProcessStreaming(
+        {bin, "interface", "--version"},
+        [&](const std::string& line) {
+            if (!line.empty()) streamed_lines.push_back(line);
+        }
+    );
+    Check(ver.exit_code == 0, "RunProcessStreaming interface --version exit 0");
+    Check(!ver.raw_output.empty(), "RunProcessStreaming captures raw_output");
+    Check(!streamed_lines.empty(), "RunProcessStreaming streams non-empty lines via callback");
+    const XlingsVersionInfo parsed_ver = ParseVersionJson(ver.raw_output);
+    Check(!parsed_ver.version.empty(), "Live interface --version parses version cleanly");
+
+    auto cancelled_ctrl = std::make_shared<ActiveProcessControl>();
+    cancelled_ctrl->Cancel();
+    const ProcessResult aborted = RunProcessStreaming({bin, "interface", "--version"}, {}, cancelled_ctrl);
+    Check(aborted.cancelled && aborted.exit_code < 0,
+          "RunProcessStreaming respects pre-cancelled ActiveProcessControl");
+}
+
 } // namespace
 
 int main() {
@@ -328,6 +373,8 @@ int main() {
     TestVersionCompareAndMultiActiveGrouping();
     TestParseRemovePlanEvents();
     TestParsePayloadStatusAndUpdatablePlans();
+    TestWhitespaceAndSearchNormalization();
+    TestProcessStreamingAndCancel();
 
     if (failures == 0) {
         std::println("All parser and xlings integration tests passed.");

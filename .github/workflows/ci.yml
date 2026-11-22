@@ -118,8 +118,9 @@ jobs:
           tar_out="dist/hxlings-${pkg_version}-linux-x86_64.tar.gz"
           mcpp pack hxlings --release --pkg-format tar --output "$tar_out"
           test -s "$tar_out"
-          tar -tzf "$tar_out" | grep -q 'hxlings.resources/huxerui/resources.bin'
-          tar -tzf "$tar_out" | grep -q 'dropdown_indicator\.huxv'
+          tar_list=$(tar -tzf "$tar_out")
+          printf '%s\n' "$tar_list" | grep -q 'hxlings.resources/huxerui/resources.bin'
+          printf '%s\n' "$tar_list" | grep -q 'dropdown_indicator\.huxv'
 
           deb_src=$(mcpp pack hxlings --release --pkg-format deb --message-format json | extract_pack_path)
           test -s "$deb_src"
@@ -234,8 +235,9 @@ jobs:
           tar_out="dist/hxlings-${pkg_version}-macos-arm64.tar.gz"
           mcpp pack hxlings --release --pkg-format tar --output "$tar_out"
           test -s "$tar_out"
-          tar -tzf "$tar_out" | grep -Eq '(hxlings\.resources|HuxerUI)/huxerui/resources\.bin'
-          tar -tzf "$tar_out" | grep -q 'dropdown_indicator\.huxv'
+          tar_list=$(tar -tzf "$tar_out")
+          printf '%s\n' "$tar_list" | grep -Eq '(hxlings\.resources|HuxerUI)/huxerui/resources\.bin'
+          printf '%s\n' "$tar_list" | grep -q 'dropdown_indicator\.huxv'
 
           dmg_src=$(mcpp pack hxlings --release --pkg-format dmg --message-format json | extract_pack_path)
           test -s "$dmg_src"

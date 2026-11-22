@@ -28,11 +28,11 @@ version = "0.27.0"
 source  = "index+mcpplibs@0.27.0"
 hash    = "fnv1a:4694783324a9057f"
 
-[package."os"]
+[package."mcpplibs.os"]
 namespace = "mcpplibs"
 version = "0.4.5"
 source  = "index+mcpplibs@0.4.5"
-hash    = "fnv1a:1f6e11a858876b78"
+hash    = "fnv1a:c06e45a4f73f16a8"
 
 [package."nlohmann.json"]
 namespace = "nlohmann"

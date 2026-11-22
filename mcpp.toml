@@ -15,12 +15,17 @@ id   = "io.github.farnaherry.hxlings"
 [dependencies.huxerui]
 huxerui = { git = "https://github.com/HuxerUI/HuxerUI.git", branch = "main" }
 
+[dependencies.mcpplibs]
+os = "0.4.5"
+
 [dependencies.nlohmann]
 json = "3.12.0"
 
 [targets.hxlings]
-kind = "bin"
-main = "src/main.cpp"
+kind              = "app"
+main              = "src/main.cpp"
+windows_subsystem = "windows"
+windows_entry     = "main"
 
 [build]
 sources = []

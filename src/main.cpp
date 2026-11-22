@@ -1,33 +1,42 @@
-#if defined(__linux__)
-#include <stdlib.h>
-#include <string.h>
-#endif
-
+import std;
+import mcpplibs.os;
 import huxerui;
 import app;
 
-#if defined(_WIN32) && defined(_MSC_VER)
-#pragma comment(linker, "/subsystem:windows")
-#pragma comment(linker, "/entry:mainCRTStartup")
-#endif
+namespace {
 
-int main() {
-#if defined(__linux__)
-    if (const char* backend = ::getenv("GDK_BACKEND"); backend == nullptr || *backend == '\0') {
-        const char* wayland = ::getenv("WAYLAND_DISPLAY");
-        const char* x11 = ::getenv("DISPLAY");
-        if (wayland != nullptr && *wayland != '\0' && x11 != nullptr && *x11 != '\0') {
-            ::setenv("GDK_BACKEND", "x11", 1);
-            if (const char* egl_platform = ::getenv("EGL_PLATFORM");
-                egl_platform != nullptr && ::strcmp(egl_platform, "wayland") == 0) {
-                ::unsetenv("EGL_PLATFORM");
+void ConfigureLinuxGraphicsEnv() {
+    namespace os = mcpplibs::os;
+    if constexpr (os::is_linux) {
+        using SetenvFn = int (*)(const char*, const char*, int);
+        using UnsetenvFn = int (*)(const char*);
+        const auto set_env = reinterpret_cast<SetenvFn>(os::library::process_symbol("setenv"));
+        const auto unset_env = reinterpret_cast<UnsetenvFn>(os::library::process_symbol("unsetenv"));
+        if (set_env == nullptr) return;
+
+        const auto non_empty = [](const std::optional<std::string>& v) {
+            return v.has_value() && !v->empty();
+        };
+
+        if (!non_empty(os::env::get("GDK_BACKEND"))) {
+            if (non_empty(os::env::get("WAYLAND_DISPLAY")) && non_empty(os::env::get("DISPLAY"))) {
+                set_env("GDK_BACKEND", "x11", 1);
+                if (unset_env != nullptr &&
+                    os::env::get("EGL_PLATFORM") == std::optional<std::string>("wayland")) {
+                    unset_env("EGL_PLATFORM");
+                }
             }
         }
+        const auto probe = os::env::get("INTEL_FORCE_PROBE");
+        if (!non_empty(probe) || *probe == "1") {
+            set_env("INTEL_FORCE_PROBE", "*", 1);
+        }
     }
-    if (const char* probe = ::getenv("INTEL_FORCE_PROBE");
-        probe == nullptr || *probe == '\0' || ::strcmp(probe, "1") == 0) {
-        ::setenv("INTEL_FORCE_PROBE", "*", 1);
-    }
-#endif
+}
+
+} // namespace
+
+int main() {
+    ConfigureLinuxGraphicsEnv();
     return huxerui::RunApplication();
 }

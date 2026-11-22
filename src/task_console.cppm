@@ -5,6 +5,7 @@ import huxerui;
 import xlings.types;
 import hxlings.theme;
 import hxlings.icons;
+import hxlings.shortcuts;
 import hxlings.store;
 import hxlings.components;
 
@@ -111,7 +112,7 @@ View TaskConsole() {
             true,
             std::nullopt,
             true
-        ),
+        ).With(Tooltip("切换任务日志 (" + FormatShortcut("J") + ")")),
     }.With(
         Padding(EdgeInsets::Symmetric(16.0F, 8.0F)),
         Spacing(10.0F),

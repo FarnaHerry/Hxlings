@@ -22,6 +22,28 @@ std::string TrimCopy(std::string_view sv) {
     return std::string(sv.substr(start, end - start));
 }
 
+std::string NormalizeDescription(std::string_view sv) {
+    std::string out;
+    out.reserve(sv.size());
+    bool in_ws = true;
+    for (const char ch : sv) {
+        const bool is_ws = ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n';
+        if (is_ws) {
+            if (!in_ws) {
+                out.push_back(' ');
+                in_ws = true;
+            }
+        } else {
+            out.push_back(ch);
+            in_ws = false;
+        }
+    }
+    if (!out.empty() && out.back() == ' ') {
+        out.pop_back();
+    }
+    return out;
+}
+
 std::string JsonString(const json& obj, std::string_view key, std::string_view fallback = {}) {
     if (!obj.is_object()) return std::string(fallback);
     const auto it = obj.find(std::string(key));
@@ -144,6 +166,10 @@ std::string_view StripLeadingZeros(std::string_view sv) {
 } // namespace hxlings::detail
 
 export namespace hxlings {
+
+std::string TrimWhitespace(std::string_view sv) {
+    return detail::TrimCopy(sv);
+}
 
 int CompareVersionStrings(std::string_view a, std::string_view b) {
     std::size_t pa = 0;
@@ -483,7 +509,7 @@ std::vector<SearchPkg> ParseSearchPackagesEvents(const std::vector<NdjsonEvent>&
             pkg.ns = detail::JsonString(item, "namespace");
             pkg.name = detail::JsonString(item, "name");
             pkg.version = detail::JsonString(item, "version");
-            pkg.description = detail::JsonString(item, "description");
+            pkg.description = detail::NormalizeDescription(detail::JsonString(item, "description"));
             pkg.status = detail::JsonString(item, "status");
             pkg.index = detail::JsonString(item, "index");
             pkg.categories = detail::JsonStringArray(item, "categories");
@@ -509,7 +535,7 @@ PackageDetail ParsePackageInfoEvents(const std::vector<NdjsonEvent>& events) {
             detail.package = detail::JsonString(p, "package");
             detail.ns = detail::JsonString(p, "namespace");
             detail.name = detail::JsonString(p, "name");
-            detail.description = detail::JsonString(p, "description");
+            detail.description = detail::NormalizeDescription(detail::JsonString(p, "description"));
             detail.status = detail::JsonString(p, "status");
             detail.selected_version = detail::JsonString(p, "version");
             detail.available_versions = detail::JsonStringArray(p, "versions");

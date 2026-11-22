@@ -125,12 +125,24 @@ public:
         return ParseInstalledVersionsEvents(out.events);
     }
 
-    std::vector<SearchPkg> SearchPackages(std::string_view keyword, std::string_view category = {}) const {
+    SearchOutcome SearchPackagesChecked(std::string_view keyword, std::string_view category = {}) const {
+        const std::string trimmed_kw = TrimWhitespace(keyword);
+        const std::string trimmed_cat = TrimWhitespace(category);
         nlohmann::json args = nlohmann::json::object();
-        if (!keyword.empty()) args["keyword"] = std::string(keyword);
-        if (!category.empty()) args["category"] = std::string(category);
+        if (!trimmed_kw.empty()) args["keyword"] = trimmed_kw;
+        if (!trimmed_cat.empty()) args["category"] = trimmed_cat;
         const CommandOutcome out = RunInterface("search_packages", args);
-        return ParseSearchPackagesEvents(out.events);
+        SearchOutcome result;
+        result.packages = ParseSearchPackagesEvents(out.events);
+        result.ok = out.ok;
+        if (!out.ok) {
+            result.error_message = out.error_message;
+        }
+        return result;
+    }
+
+    std::vector<SearchPkg> SearchPackages(std::string_view keyword, std::string_view category = {}) const {
+        return SearchPackagesChecked(keyword, category).packages;
     }
 
     PackageDetail QueryPackageInfo(std::string_view target) const {

@@ -16,6 +16,7 @@
 #include <vector>
 
 import app;
+import hxlings.shortcuts;
 import hxlings.store;
 import xlings.types;
 import xlings.parser;
@@ -1133,6 +1134,167 @@ void TestDuplicateDataNoDuplicateKeys(AuditContext& ctx, UiTest& ui, const std::
     }
 }
 
+void TestCrossPlatformShortcuts(AuditContext& ctx, UiTest& ui, const std::shared_ptr<XlingsStore>& store) {
+    ui.SetWindowMetrics({.viewport = {1180.0F, 760.0F}});
+    store->active_nav = 0;
+    store->dark_mode = false;
+    store->console_expanded = false;
+    ui.Pump();
+
+    ui.PressKey(Key::Digit2, PrimaryModifier());
+    ui.Pump();
+    if (store->active_nav.Get() != 1) {
+        ctx.Flag("Shortcuts", "Primary+2 did not switch to Packages page");
+    }
+
+    ui.PressKey(Key::Digit3, PrimaryModifier());
+    ui.Pump();
+    if (store->active_nav.Get() != 2) {
+        ctx.Flag("Shortcuts", "Primary+3 did not switch to Store page");
+    }
+
+    ui.PressKey(Key::Comma, PrimaryModifier());
+    ui.Pump();
+    if (store->active_nav.Get() != 5) {
+        ctx.Flag("Shortcuts", "Primary+Comma did not switch to Settings page");
+    }
+
+    ui.PressKey(Key::K, PrimaryModifier());
+    ui.Pump();
+    if (store->active_nav.Get() != 2) {
+        ctx.Flag("Shortcuts", "Primary+K did not switch to Store page");
+    }
+    const auto search_box = ui.Find(UiSelector::Key("store-search-input"));
+    if (!search_box.Exists() || !search_box.One().focused) {
+        ctx.Flag("Shortcuts", "Primary+K did not focus store-search-input");
+    }
+
+    ui.PressKey(Key::J, PrimaryModifier());
+    ui.Pump();
+    if (!store->console_expanded.Get()) {
+        ctx.Flag("Shortcuts", "Primary+J did not expand task console");
+    }
+    ui.PressKey(Key::J, PrimaryModifier());
+    ui.Pump();
+    if (store->console_expanded.Get()) {
+        ctx.Flag("Shortcuts", "Second Primary+J did not collapse task console");
+    }
+
+    ui.PressKey(Key::D, PrimaryShiftModifier());
+    ui.Pump();
+    if (!store->dark_mode.Get()) {
+        ctx.Flag("Shortcuts", "Primary+Shift+D did not enable dark mode");
+    }
+    ui.PressKey(Key::D, PrimaryShiftModifier());
+    ui.Pump();
+    if (store->dark_mode.Get()) {
+        ctx.Flag("Shortcuts", "Second Primary+Shift+D did not restore light mode");
+    }
+
+    ui.PressKey(Key::Slash, PrimaryModifier());
+    ui.Pump(500ms);
+    ui.Pump();
+    if (!ui.Find(UiSelector::Key("shortcuts-dialog")).Exists()) {
+        ctx.Flag("Shortcuts", "Primary+/ did not open shortcuts-dialog");
+    } else {
+        AuditCurrentScreen(ctx, ui, 1180.0F, 760.0F, "ShortcutsDialog", "page-store", false, true);
+        ui.PressKey(Key::Escape);
+        try {
+            ui.PumpUntil([&] { return !ui.Find(UiSelector::Key("shortcuts-dialog")).Exists(); },
+                         {.timeout = 2s, .step = 50ms});
+        } catch (const UiTestFailure& ex) {
+            ctx.Flag("Shortcuts", std::string("Escape did not close shortcuts-dialog: ") + ex.what());
+        }
+    }
+
+    ui.PressKey(Key::U, PrimaryShiftModifier());
+    ui.Pump(500ms);
+    ui.Pump();
+    const bool upd_open = std::ranges::any_of(
+        ui.Find(UiSelector::Text("批量更新软件包")).All(),
+        [](const UiNodeInfo& n) { return n.participates_in_layout && n.in_viewport; }
+    );
+    if (store->active_nav.Get() != 1 || !upd_open) {
+        ctx.Flag("Shortcuts", "Primary+Shift+U did not open BatchUpdateDialog on Packages page");
+    } else {
+        ui.PressKey(Key::Escape);
+        try {
+            ui.PumpUntil(
+                [&] {
+                    return !ui.Find(UiSelector::Text("执行批量更新")).Exists() &&
+                           std::ranges::none_of(
+                               ui.Find(UiSelector::Text("批量更新软件包")).All(),
+                               [](const UiNodeInfo& n) { return n.participates_in_layout; }
+                           );
+                },
+                {.timeout = 2s, .step = 50ms}
+            );
+        } catch (const UiTestFailure& ex) {
+            ctx.Flag("Shortcuts", std::string("Escape did not close BatchUpdateDialog: ") + ex.what());
+        }
+    }
+}
+
+void TestMacOsTitleBarMetrics(AuditContext& ctx, UiTest& ui, const std::shared_ptr<XlingsStore>& store) {
+    store->active_nav = 0;
+    for (const auto [w, h] : std::array<std::pair<float, float>, 2>{{{1180.0F, 760.0F}, {880.0F, 560.0F}}}) {
+        ui.SetWindowMetrics({
+            .viewport = {w, h},
+            .title_bar = WindowTitleBarMetrics{
+                .height = 44.0F,
+                .left_inset = 78.0F,
+                .right_inset = 0.0F,
+                .maximized = false,
+            },
+        });
+        ui.Pump();
+        AuditCurrentScreen(ctx, ui, w, h, "MacTitleBar", "page-dashboard");
+    }
+    ui.SetWindowMetrics({.viewport = {1180.0F, 760.0F}});
+    ui.Pump();
+}
+
+void TestStorePaginationAndErrorStates(AuditContext& ctx, UiTest& ui, const std::shared_ptr<XlingsStore>& store) {
+    ui.SetWindowMetrics({.viewport = {1180.0F, 760.0F}});
+    store->active_nav = 2;
+    const auto saved_results = store->search_results.Get();
+    const auto saved_error = store->search_error.Get();
+
+    std::vector<SearchPkg> many;
+    many.reserve(80);
+    for (int i = 0; i < 80; ++i) {
+        many.push_back(SearchPkg{
+            .package = "xim:pkg-" + std::to_string(i),
+            .ns = "xim",
+            .name = "pkg-" + std::to_string(i),
+            .version = "1.0." + std::to_string(i),
+            .description = "Sample package description #" + std::to_string(i),
+            .status = "stable",
+            .index = "xim",
+        });
+    }
+    store->search_error = std::string{};
+    store->search_results = std::move(many);
+    ui.Pump();
+    AuditCurrentScreen(ctx, ui, 1180.0F, 760.0F, "Store[80Results]", "page-store", true);
+
+    if (!ui.Find(UiSelector::Key("store-load-more")).Exists()) {
+        ctx.Flag("StorePagination", "Missing store-load-more button when 80 results are present");
+    }
+
+    store->search_results = std::vector<SearchPkg>{};
+    store->search_error = std::string("search failed: index not synced");
+    ui.Pump();
+    if (!ui.Find(UiSelector::Text("搜索软件包失败")).Exists()) {
+        ctx.Flag("StoreError", "Store error state message not rendered");
+    }
+    AuditCurrentScreen(ctx, ui, 1180.0F, 760.0F, "Store[ErrorState]", "page-store", true);
+
+    store->search_error = saved_error;
+    store->search_results = saved_results;
+    ui.Pump();
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1180,6 +1342,9 @@ int main(int argc, char** argv) {
     ui.Pump();
     AuditCurrentScreen(ctx, ui, 1440.0F, 900.0F, "Packages", "page-packages", true);
 
+    TestCrossPlatformShortcuts(ctx, ui, store);
+    TestMacOsTitleBarMetrics(ctx, ui, store);
+    TestStorePaginationAndErrorStates(ctx, ui, store);
     TestDuplicateDataNoDuplicateKeys(ctx, ui, store);
 
     if (ctx.anomalies.empty()) {
