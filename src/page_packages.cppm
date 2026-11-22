@@ -86,13 +86,17 @@ View BatchPruneDialogContent(
     std::vector<std::string> all_removable_keys;
     std::vector<ExpiredPackagePlan> selected_targets;
     std::size_t total_removable_pkgs = 0;
+    std::size_t protected_only_pkgs = 0;
     std::uint64_t total_reclaimable_bytes = 0;
     std::size_t sel_pkgs = 0;
     std::size_t sel_vers = 0;
     std::uint64_t sel_bytes = 0;
 
     for (const auto& item : plans) {
-        if (item.plan.remove.empty()) continue;
+        if (item.plan.remove.empty()) {
+            if (!item.plan.keep.empty()) ++protected_only_pkgs;
+            continue;
+        }
         ++total_removable_pkgs;
         total_reclaimable_bytes += item.plan.total_bytes;
         all_removable_keys.push_back(item.key);
@@ -104,13 +108,19 @@ View BatchPruneDialogContent(
         }
     }
 
-    const std::string header_text =
-        scanning
-            ? std::string("正在通过 xlings dry-run 扫描过期版本...")
-            : (total_removable_pkgs == 0
-                   ? std::string("未发现可清理的过期版本")
-                   : ("共扫描到 " + std::to_string(total_removable_pkgs) + " 个可清理包 · 可释放 " +
-                      FormatBytes(total_reclaimable_bytes)));
+    std::string header_text;
+    if (scanning) {
+        header_text = "正在通过 xlings dry-run 扫描过期版本...";
+    } else if (total_removable_pkgs == 0) {
+        header_text = "未发现可清理的过期版本";
+    } else if (protected_only_pkgs > 0) {
+        header_text = "可清理 " + std::to_string(total_removable_pkgs) + " 包 · " +
+                      FormatBytes(total_reclaimable_bytes) + " (已跳过 " +
+                      std::to_string(protected_only_pkgs) + " 保护包)";
+    } else {
+        header_text = "共扫描到 " + std::to_string(total_removable_pkgs) + " 个可清理包 · 可释放 " +
+                      FormatBytes(total_reclaimable_bytes);
+    }
 
     View summary_bar = Row {
         Text(header_text, TextRole::Body)
@@ -272,6 +282,8 @@ View BatchPruneDialogContent(
         std::move(list_body),
     }.With(Spacing(10.0F), CrossAlign(CrossAxisAlignment::Stretch));
 
+    const bool can_execute = !selected_targets.empty() && !scanning && !task_running;
+
     View actions = Row {
         Text(
             "已选 " + std::to_string(sel_pkgs) + " 包 · " + std::to_string(sel_vers) + " 版本 · " +
@@ -289,7 +301,7 @@ View BatchPruneDialogContent(
                 ctx.Dismiss();
                 store->BatchRemoveExpiredAsync(tasks, toast, std::move(selected_targets));
             },
-            !selected_targets.empty() && !scanning && !task_running,
+            can_execute,
             icons::TrashIcon(),
             true
         ),

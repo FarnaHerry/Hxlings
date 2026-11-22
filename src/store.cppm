@@ -532,6 +532,7 @@ public:
         if (scanning_expired.Get()) return;
         scanning_expired = true;
 
+        const bool already_loaded = initial_loaded.Get();
         std::vector<PkgGroup> candidates;
         for (const auto& g : installed_groups.Get()) {
             if (g.versions.size() > 1) candidates.push_back(g);
@@ -539,8 +540,13 @@ public:
 
         auto self = shared_from_this();
         const XlingsClient client = client_;
-        tasks.Launch([self, client, candidates = std::move(candidates)]() mutable -> Task<void> {
-            auto results = co_await RunWorker([client, candidates = std::move(candidates)]() {
+        tasks.Launch([self, client, already_loaded, candidates = std::move(candidates)]() mutable -> Task<void> {
+            auto results = co_await RunWorker([client, already_loaded, candidates = std::move(candidates)]() mutable {
+                if (candidates.empty() && !already_loaded) {
+                    for (const auto& g : GroupInstalledPackages(client.ListInstalledPackages())) {
+                        if (g.versions.size() > 1) candidates.push_back(g);
+                    }
+                }
                 std::vector<ExpiredPackagePlan> out;
                 for (const auto& g : candidates) {
                     std::string cutoff = g.active_version;

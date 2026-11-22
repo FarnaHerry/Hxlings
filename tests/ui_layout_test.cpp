@@ -819,6 +819,29 @@ void AuditAllPagesAtViewport(
             ctx.Flag(vp_tag + " / BatchPruneDialog", "BatchPruneDialog content not visible in viewport");
         }
         AuditCurrentScreen(ctx, ui, w, h, "BatchPruneDialog", "page-packages", false, true);
+
+        const auto exec_btn_sel = UiSemanticSelector::AllOf(
+            UiSemanticSelector::Role(SemanticRole::Button),
+            UiSemanticSelector::Label("执行批量清理")
+        );
+        const auto exec_sem = ui.FindSemantics(exec_btn_sel);
+        if (!exec_sem.Exists() || !exec_sem.One().enabled) {
+            ctx.Flag(vp_tag + " / BatchPruneDialog",
+                     "执行批量清理 should be enabled by default even when a protected package is present");
+        }
+        if (SafeTap(ctx, vp_tag + " / BatchPruneDialog", ui.Find(UiSelector::Text("全不选")), "全不选")) {
+            ui.Pump();
+            if (!ui.FindSemantics(exec_btn_sel).Exists() || ui.FindSemantics(exec_btn_sel).One().enabled) {
+                ctx.Flag(vp_tag + " / BatchPruneDialog", "执行批量清理 should be disabled after 全不选");
+            }
+        }
+        if (SafeTap(ctx, vp_tag + " / BatchPruneDialog", ui.Find(UiSelector::Text("全选")), "全选")) {
+            ui.Pump();
+            if (!ui.FindSemantics(exec_btn_sel).Exists() || !ui.FindSemantics(exec_btn_sel).One().enabled) {
+                ctx.Flag(vp_tag + " / BatchPruneDialog", "执行批量清理 should be re-enabled after 全选");
+            }
+        }
+
         if (SafeTap(ctx, vp_tag + " / BatchPruneDialog", ui.Find(UiSelector::Text("取消")), "取消(BatchPruneDialog)")) {
             try {
                 ui.PumpUntil(
