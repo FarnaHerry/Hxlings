@@ -27,9 +27,22 @@ mcpp test
 # 启动桌面 GUI
 mcpp run
 
-# 打包可分发压缩包
-mcpp pack hxlings --release
+# 打包便携归档或各平台原生安装包
+mcpp pack hxlings --release --pkg-format tar        # Linux/macOS 便携归档（Windows 使用 zip）
+mcpp pack hxlings --release --pkg-format deb        # Linux DEB 安装包
+mcpp pack hxlings --release --pkg-format rpm        # Linux RPM 安装包
+mcpp pack hxlings --release --pkg-format appimage   # Linux AppImage
+mcpp pack hxlings --release --pkg-format msi        # Windows MSI 安装包
+mcpp pack hxlings --release --pkg-format setup      # Windows Burn 安装向导（内含 MSI）
+mcpp pack hxlings --release --pkg-format dmg        # macOS DMG 磁盘镜像
 ```
+
+## 发布产物矩阵（Release）
+
+- **Linux (`x86_64`)**：`.tar.gz` 便携归档、`.deb`、`.rpm`、`.AppImage`（附带桌面图标 [hxlings.svg](platform/linux/package/hxlings.svg) 与 `.desktop` 入口）
+- **Windows (`x86_64`)**：`.zip` 便携归档、`.msi`、`-setup.exe`（WiX Burn 安装器）
+- **macOS (`arm64`)**：`.tar.gz` 便携归档、`.dmg`（含 `Hxlings.app` 与 `/Applications` 快捷方式）
+- **校验文件**：随 Release 一并发布 `SHA256SUMS.txt`
 
 ## 说明
 

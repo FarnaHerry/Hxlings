@@ -13,10 +13,11 @@ concurrency:
 
 jobs:
   build:
-    name: Build and package release archives
+    name: Build and package release artifacts
     uses: ./.github/workflows/ci.yml
     with:
       package: true
+      release_version: ${{ github.ref_name }}
     permissions:
       contents: read
 
@@ -30,21 +31,40 @@ jobs:
       - name: Check out release tag
         uses: actions/checkout@v4
 
-      - name: Download platform archives
+      - name: Download platform artifacts
         uses: actions/download-artifact@v4
         with:
           pattern: hxlings-*
+          path: release
           merge-multiple: true
 
-      - name: Verify release assets
+      - name: Verify release assets and generate checksums
         shell: bash
         run: |
           set -euo pipefail
-          assets=(hxlings-linux-x86_64.tar.gz hxlings-macos-arm64.tar.gz hxlings-windows-x86_64.zip)
+          release_version="${GITHUB_REF_NAME#v}"
+          test -n "$release_version"
+          test "$release_version" != "$GITHUB_REF_NAME"
+
+          assets=(
+            "hxlings-${release_version}-linux-x86_64.tar.gz"
+            "hxlings-${release_version}-linux-x86_64.deb"
+            "hxlings-${release_version}-linux-x86_64.rpm"
+            "hxlings-${release_version}-linux-x86_64.AppImage"
+            "hxlings-${release_version}-windows-x86_64.zip"
+            "hxlings-${release_version}-windows-x86_64.msi"
+            "hxlings-${release_version}-windows-x86_64-setup.exe"
+            "hxlings-${release_version}-macos-arm64.tar.gz"
+            "hxlings-${release_version}-macos-arm64.dmg"
+          )
+
           for asset in "${assets[@]}"; do
-            test -s "$asset"
+            test -s "release/$asset"
           done
-          printf '%s\n' "${assets[@]}"
+
+          (cd release && sha256sum "${assets[@]}" > SHA256SUMS.txt)
+          ls -lh release
+          cat release/SHA256SUMS.txt
 
       - name: Create or update GitHub release
         shell: bash
@@ -52,10 +72,19 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          assets=(hxlings-linux-x86_64.tar.gz hxlings-macos-arm64.tar.gz hxlings-windows-x86_64.zip)
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber
+          notes="docs/releases/$GITHUB_REF_NAME.md"
+          if [ -f "$notes" ]; then
+            note_args=(--notes-file "$notes")
           else
-            gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
-              --title "Hxlings $GITHUB_REF_NAME" --generate-notes
+            note_args=(--generate-notes)
+          fi
+
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber release/*
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "Hxlings $GITHUB_REF_NAME" \
+              "${note_args[@]}" \
+              release/*
           fi

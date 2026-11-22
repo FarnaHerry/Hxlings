@@ -4,6 +4,12 @@ import huxerui.rules;
 
 namespace {
 
+huxerui::rules::options make_rules_options() {
+    huxerui::rules::options opt{};
+    opt.package.categories = {"Development", "Utility"};
+    return opt;
+}
+
 // Mirror huxerui::rules::configure({}) on macOS while omitting dev-time
 // `bundle:*` edges that reference ${mcpp.target_file:<program>} and break
 // `mcpp test` when only test targets are built. Deployed HuxerUI/ resources
@@ -76,7 +82,7 @@ bool configure_macos() {
         huxerui::rules::write_framework_record();
     }
 
-    const huxerui::rules::options opt{};
+    const huxerui::rules::options opt = make_rules_options();
     auto rs = huxerui::rules::plan_resources(opt, graph, has_module_interface);
     bool has_resource_edges = false;
     for (auto& e : rs) {
@@ -104,7 +110,7 @@ bool configure_macos() {
 int main() {
     const bool configured = std::string_view(mcpp::target_os()) == "macos"
         ? configure_macos()
-        : huxerui::rules::configure({});
+        : huxerui::rules::configure(make_rules_options());
     if (!configured) return 1;
 
     const std::string huxerui_root = mcpp::dep_dir("huxerui");

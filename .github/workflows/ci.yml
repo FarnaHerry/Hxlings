@@ -9,10 +9,15 @@ on:
   workflow_call:
     inputs:
       package:
-        description: Build and upload platform release archives
+        description: Build and upload platform release archives and installers
         required: false
         type: boolean
         default: false
+      release_version:
+        description: Release version override (e.g. v0.1.0 or 0.1.0)
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -91,21 +96,63 @@ jobs:
       - name: Run tests
         run: mcpp test
 
-      - name: Package release archive
+      - name: Package release artifacts
         if: inputs.package || github.event_name != 'pull_request'
+        shell: bash
         run: |
-          mkdir -p dist
-          mcpp pack hxlings --release --pkg-format tar --output dist/hxlings-linux-x86_64.tar.gz
-          test -s dist/hxlings-linux-x86_64.tar.gz
-          tar -tzf dist/hxlings-linux-x86_64.tar.gz | grep -q 'hxlings.resources/huxerui/resources.bin'
-          tar -tzf dist/hxlings-linux-x86_64.tar.gz | grep -q 'dropdown_indicator\.huxv'
+          set -euo pipefail
+          raw_ver="${{ inputs.release_version }}"
+          if [ -n "$raw_ver" ]; then
+            pkg_version="${raw_ver#v}"
+          else
+            pkg_version=$(python3 -c 'import re; text=open("mcpp.toml").read(); print(re.search(r"(?m)^version\s*=\s*\"([^\"]+)\"", text).group(1))')
+          fi
+          test -n "$pkg_version"
 
-      - name: Upload release archive
+          extract_pack_path() {
+            python3 -c 'import sys, json; print(json.load(sys.stdin)["data"]["artifacts"][0]["path"])'
+          }
+
+          mkdir -p dist
+
+          tar_out="dist/hxlings-${pkg_version}-linux-x86_64.tar.gz"
+          mcpp pack hxlings --release --pkg-format tar --output "$tar_out"
+          test -s "$tar_out"
+          tar -tzf "$tar_out" | grep -q 'hxlings.resources/huxerui/resources.bin'
+          tar -tzf "$tar_out" | grep -q 'dropdown_indicator\.huxv'
+
+          deb_src=$(mcpp pack hxlings --release --pkg-format deb --message-format json | extract_pack_path)
+          test -s "$deb_src"
+          deb_out="dist/hxlings-${pkg_version}-linux-x86_64.deb"
+          cp "$deb_src" "$deb_out"
+          dpkg-deb -I "$deb_out"
+          deb_list=$(dpkg-deb -c "$deb_out")
+          echo "$deb_list" | grep -q '/usr/bin/hxlings'
+          echo "$deb_list" | grep -q 'hxlings\.resources/huxerui/resources\.bin'
+          echo "$deb_list" | grep -q '/usr/share/applications/hxlings\.desktop'
+          echo "$deb_list" | grep -q '/usr/share/icons/hicolor/scalable/apps/hxlings\.svg'
+
+          rpm_src=$(mcpp pack hxlings --release --pkg-format rpm --message-format json | extract_pack_path)
+          test -s "$rpm_src"
+          rpm_out="dist/hxlings-${pkg_version}-linux-x86_64.rpm"
+          cp "$rpm_src" "$rpm_out"
+          file "$rpm_out" | grep -q 'RPM'
+
+          app_src=$(mcpp pack hxlings --release --pkg-format appimage --message-format json | extract_pack_path)
+          test -s "$app_src"
+          app_out="dist/hxlings-${pkg_version}-linux-x86_64.AppImage"
+          cp "$app_src" "$app_out"
+          chmod +x "$app_out"
+          file "$app_out" | grep -qiE 'ELF|AppImage'
+
+          ls -lh dist
+
+      - name: Upload release artifacts
         if: inputs.package || github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
         with:
           name: hxlings-linux-x86_64
-          path: dist/hxlings-linux-x86_64.tar.gz
+          path: dist/*
           if-no-files-found: error
 
   macos:
@@ -165,21 +212,45 @@ jobs:
       - name: Run tests
         run: mcpp test
 
-      - name: Package release archive
+      - name: Package release artifacts
         if: inputs.package || github.event_name != 'pull_request'
+        shell: bash
         run: |
-          mkdir -p dist
-          mcpp pack hxlings --release --pkg-format tar --output dist/hxlings-macos-arm64.tar.gz
-          test -s dist/hxlings-macos-arm64.tar.gz
-          tar -tzf dist/hxlings-macos-arm64.tar.gz | grep -Eq '(hxlings\.resources|HuxerUI)/huxerui/resources\.bin'
-          tar -tzf dist/hxlings-macos-arm64.tar.gz | grep -q 'dropdown_indicator\.huxv'
+          set -euo pipefail
+          raw_ver="${{ inputs.release_version }}"
+          if [ -n "$raw_ver" ]; then
+            pkg_version="${raw_ver#v}"
+          else
+            pkg_version=$(python3 -c 'import re; text=open("mcpp.toml").read(); print(re.search(r"(?m)^version\s*=\s*\"([^\"]+)\"", text).group(1))')
+          fi
+          test -n "$pkg_version"
 
-      - name: Upload release archive
+          extract_pack_path() {
+            python3 -c 'import sys, json; print(json.load(sys.stdin)["data"]["artifacts"][0]["path"])'
+          }
+
+          mkdir -p dist
+
+          tar_out="dist/hxlings-${pkg_version}-macos-arm64.tar.gz"
+          mcpp pack hxlings --release --pkg-format tar --output "$tar_out"
+          test -s "$tar_out"
+          tar -tzf "$tar_out" | grep -Eq '(hxlings\.resources|HuxerUI)/huxerui/resources\.bin'
+          tar -tzf "$tar_out" | grep -q 'dropdown_indicator\.huxv'
+
+          dmg_src=$(mcpp pack hxlings --release --pkg-format dmg --message-format json | extract_pack_path)
+          test -s "$dmg_src"
+          dmg_out="dist/hxlings-${pkg_version}-macos-arm64.dmg"
+          cp "$dmg_src" "$dmg_out"
+          hdiutil verify "$dmg_out"
+
+          ls -lh dist
+
+      - name: Upload release artifacts
         if: inputs.package || github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
         with:
           name: hxlings-macos-arm64
-          path: dist/hxlings-macos-arm64.tar.gz
+          path: dist/*
           if-no-files-found: error
 
   windows:
@@ -257,20 +328,86 @@ jobs:
           mcpp test
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Package release archive
+      - name: Package release artifacts
         if: inputs.package || github.event_name != 'pull_request'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          New-Item -ItemType Directory -Path dist -Force | Out-Null
-          mcpp pack hxlings --release --pkg-format zip --output dist/hxlings-windows-x86_64.zip
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          if (-not (Test-Path 'dist/hxlings-windows-x86_64.zip')) { throw 'missing packed zip' }
+          dotnet --list-runtimes
 
-      - name: Upload release archive
+          $rawVer = '${{ inputs.release_version }}'
+          if (-not [string]::IsNullOrWhiteSpace($rawVer)) {
+            $pkgVersion = $rawVer.TrimStart('v')
+          } else {
+            $toml = Get-Content 'mcpp.toml' -Raw
+            if ($toml -match '(?m)^version\s*=\s*"([^"]+)"') {
+              $pkgVersion = $Matches[1]
+            }
+          }
+          if (-not $pkgVersion) { throw 'Failed to resolve package version' }
+
+          New-Item -ItemType Directory -Path dist -Force | Out-Null
+
+          $zipOut = "dist/hxlings-$pkgVersion-windows-x86_64.zip"
+          mcpp pack hxlings --release --pkg-format zip --output $zipOut
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not (Test-Path $zipOut -PathType Leaf) -or (Get-Item $zipOut).Length -le 0) {
+            throw "missing or empty $zipOut"
+          }
+
+          $setupJsonRaw = mcpp pack hxlings --release --pkg-format setup --message-format json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $setupJson = ($setupJsonRaw -join "`n") | ConvertFrom-Json
+          $setupSrc = [string]$setupJson.data.artifacts[0].path
+          if (-not $setupSrc -or -not (Test-Path $setupSrc -PathType Leaf)) {
+            throw "mcpp pack --pkg-format setup did not produce an exe: $setupSrc"
+          }
+          $setupOut = "dist/hxlings-$pkgVersion-windows-x86_64-setup.exe"
+          Copy-Item -Path $setupSrc -Destination $setupOut -Force
+
+          $msiCandidate = [System.IO.Path]::ChangeExtension($setupSrc, '.msi')
+          if (-not (Test-Path $msiCandidate -PathType Leaf)) {
+            $msiJsonRaw = mcpp pack hxlings --release --pkg-format msi --message-format json
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $msiJson = ($msiJsonRaw -join "`n") | ConvertFrom-Json
+            $msiCandidate = [string]$msiJson.data.artifacts[0].path
+          }
+          if (-not $msiCandidate -or -not (Test-Path $msiCandidate -PathType Leaf)) {
+            throw "MSI not found beside bundle or via --pkg-format msi: $msiCandidate"
+          }
+          $msiOut = "dist/hxlings-$pkgVersion-windows-x86_64.msi"
+          Copy-Item -Path $msiCandidate -Destination $msiOut -Force
+
+          $installer = New-Object -ComObject WindowsInstaller.Installer
+          $db = $installer.GetType().InvokeMember('OpenDatabase', 'InvokeMethod', $null, $installer, @((Resolve-Path $msiOut).Path, 0))
+          $view = $db.GetType().InvokeMember('OpenView', 'InvokeMethod', $null, $db, @('SELECT FileName, FileSize FROM File'))
+          $view.GetType().InvokeMember('Execute', 'InvokeMethod', $null, $view, $null)
+          $files = @()
+          while ($true) {
+            $row = $view.GetType().InvokeMember('Fetch', 'InvokeMethod', $null, $view, $null)
+            if (-not $row) { break }
+            $name = $row.GetType().InvokeMember('StringData', 'GetProperty', $null, $row, @(1))
+            $size = $row.GetType().InvokeMember('IntegerData', 'GetProperty', $null, $row, @(2))
+            $files += [pscustomobject]@{ Name = $name; Size = $size }
+          }
+          if ($files.Count -eq 0) { throw 'the MSI File table is empty' }
+          $exeEntry = $files | Where-Object { $_.Name -like '*hxlings.exe*' } | Select-Object -First 1
+          if (-not $exeEntry) { throw 'the MSI does not carry hxlings.exe' }
+          if ($exeEntry.Size -lt 1MB) { throw "the MSI hxlings.exe is implausibly small ($($exeEntry.Size) bytes)" }
+          if (-not ($files | Where-Object { $_.Name -like '*resources.bin*' })) {
+            throw 'the MSI does not carry huxerui/resources.bin'
+          }
+
+          if ((Get-Item $setupOut).Length -le (Get-Item $msiOut).Length) {
+            throw "setup.exe ($((Get-Item $setupOut).Length)) should be larger than chained MSI ($((Get-Item $msiOut).Length))"
+          }
+
+          Get-Item dist/* | Format-Table Name, Length
+
+      - name: Upload release artifacts
         if: inputs.package || github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
         with:
           name: hxlings-windows-x86_64
-          path: dist/hxlings-windows-x86_64.zip
+          path: dist/*
           if-no-files-found: error
