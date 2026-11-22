@@ -587,6 +587,110 @@ std::optional<RemovePlan> ParseRemovePlanEvents(const std::vector<NdjsonEvent>& 
     return latest;
 }
 
+std::vector<PayloadStatusItem> ParsePayloadStatusEvents(const std::vector<NdjsonEvent>& events) {
+    std::vector<PayloadStatusItem> out;
+    for (const auto& ev : events) {
+        if (ev.kind != "data" || ev.data_kind != "payload_status") continue;
+        const auto obj = detail::TryParseJsonObject(ev.raw_line);
+        if (!obj || !obj->contains("payload") || !(*obj)["payload"].is_object()) continue;
+        const auto& pl = (*obj)["payload"];
+        if (!pl.contains("targets") || !pl["targets"].is_array()) continue;
+
+        out.clear();
+        for (const auto& t : pl["targets"]) {
+            if (!t.is_object()) continue;
+            PayloadStatusItem item;
+            item.request = detail::JsonString(t, "request");
+            item.ns = detail::JsonString(t, "namespace");
+            item.name = detail::JsonString(t, "name");
+            item.version = detail::JsonString(t, "version");
+            item.origin = detail::JsonString(t, "origin");
+            item.payload_dir = detail::JsonString(t, "payload_dir");
+            item.error = detail::JsonString(t, "error");
+            item.revision = detail::JsonInt(t, "revision");
+            if (t.contains("installed_revision") && t["installed_revision"].is_number_integer()) {
+                item.installed_revision = t["installed_revision"].get<int>();
+            }
+            item.complete = detail::JsonBool(t, "complete");
+            item.current = detail::JsonBool(t, "current");
+            item.usable = detail::JsonBool(t, "usable");
+            out.push_back(std::move(item));
+        }
+    }
+    return out;
+}
+
+std::vector<UpdatablePackagePlan> BuildUpdatablePlans(
+    const std::vector<PkgGroup>& groups,
+    const std::vector<PayloadStatusItem>& statuses
+) {
+    auto find_status = [&](const PkgGroup& g) -> const PayloadStatusItem* {
+        for (const auto& ps : statuses) {
+            if (!ps.request.empty() && ps.request == g.key) return &ps;
+        }
+        for (const auto& ps : statuses) {
+            const std::string fq = ps.ns.empty() ? ps.name : (ps.ns + ":" + ps.name);
+            if ((!fq.empty() && fq == g.key) || (!ps.name.empty() && ps.name == g.key)) {
+                return &ps;
+            }
+        }
+        return nullptr;
+    };
+
+    std::vector<UpdatablePackagePlan> plans;
+    for (const auto& g : groups) {
+        const PayloadStatusItem* ps = find_status(g);
+        if (ps == nullptr) continue;
+
+        const std::string highest_installed = g.versions.empty() ? std::string{} : g.versions.front().version;
+        const std::string current_ver = !g.active_version.empty() ? g.active_version : highest_installed;
+
+        if (!ps->error.empty()) {
+            const std::size_t nl = ps->error.find('\n');
+            const std::string first_line = detail::TrimCopy(
+                nl == std::string::npos ? std::string_view(ps->error)
+                                        : std::string_view(ps->error).substr(0, nl)
+            );
+            plans.push_back(UpdatablePackagePlan{
+                .key = g.key,
+                .ns = g.ns,
+                .name = g.name,
+                .current_version = current_ver,
+                .active_version = g.active_version,
+                .is_skipped = true,
+                .skip_reason = first_line,
+            });
+            continue;
+        }
+
+        if (ps->current || ps->version.empty()) continue;
+
+        const bool latest_installed = std::ranges::any_of(
+            g.versions, [&](const InstalledPkg& iv) { return iv.version == ps->version; });
+        const bool rev_only = latest_installed && ps->origin == "local" && ps->complete;
+
+        plans.push_back(UpdatablePackagePlan{
+            .key = g.key,
+            .ns = g.ns,
+            .name = g.name,
+            .current_version = rev_only ? ps->version : current_ver,
+            .active_version = g.active_version,
+            .latest_version = ps->version,
+            .installed_revision = ps->installed_revision.value_or(0),
+            .latest_revision = ps->revision,
+            .is_revision_only = rev_only,
+            .is_skipped = false,
+        });
+    }
+
+    std::ranges::sort(plans, [](const UpdatablePackagePlan& a, const UpdatablePackagePlan& b) {
+        if (a.is_skipped != b.is_skipped) return !a.is_skipped;
+        if (a.is_revision_only != b.is_revision_only) return !a.is_revision_only;
+        return a.key < b.key;
+    });
+    return plans;
+}
+
 std::vector<SubosEntry> ParseSubosListEvents(const std::vector<NdjsonEvent>& events) {
     std::vector<SubosEntry> out;
     for (const auto& ev : events) {

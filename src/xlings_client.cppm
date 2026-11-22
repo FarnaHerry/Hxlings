@@ -254,6 +254,12 @@ public:
         return ParseRemovePlanEvents(out.events);
     }
 
+    std::vector<PayloadStatusItem> QueryPayloadStatus(const std::vector<std::string>& targets) const {
+        if (targets.empty()) return {};
+        const CommandOutcome out = RunInterface("payload_status", {{"targets", targets}});
+        return ParsePayloadStatusEvents(out.events);
+    }
+
     CommandOutcome UpdatePackages(
         std::string_view target = {},
         EventCallback on_event = {},

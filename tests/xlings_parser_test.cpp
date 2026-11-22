@@ -239,6 +239,82 @@ void TestParseRemovePlanEvents() {
     Check(!empty_plan.has_value(), "ParseRemovePlanEvents returns nullopt when absent");
 }
 
+void TestParsePayloadStatusAndUpdatablePlans() {
+    const std::string status_raw =
+        "{\"dataKind\":\"payload_status\",\"kind\":\"data\",\"payload\":{\"targets\":["
+        "{\"error\":\"package 'local:node' not found in the synced index\\ndetail line\",\"request\":\"local:node\"},"
+        "{\"complete\":true,\"current\":false,\"installed_revision\":0,\"name\":\"bwrap\",\"namespace\":\"xim\",\"origin\":\"local\",\"payload_dir\":\"/tmp/bwrap\",\"request\":\"xim:bwrap\",\"revision\":1,\"usable\":true,\"version\":\"0.11.2\"},"
+        "{\"complete\":true,\"current\":true,\"installed_revision\":0,\"name\":\"cmake\",\"namespace\":\"xim\",\"origin\":\"local\",\"payload_dir\":\"/tmp/cmake\",\"request\":\"xim:cmake\",\"revision\":0,\"usable\":true,\"version\":\"4.5.0\"},"
+        "{\"complete\":false,\"current\":false,\"installed_revision\":null,\"name\":\"pnpm\",\"namespace\":\"xim\",\"origin\":\"absent\",\"payload_dir\":\"/tmp/pnpm\",\"request\":\"xim:pnpm\",\"revision\":0,\"usable\":false,\"version\":\"12.22.0\"},"
+        "{\"complete\":false,\"current\":false,\"installed_revision\":null,\"name\":\"huxerui\",\"namespace\":\"xim\",\"origin\":\"absent\",\"payload_dir\":\"/tmp/huxerui\",\"request\":\"xim:huxerui\",\"revision\":0,\"usable\":false,\"version\":\"0.5.0\"}"
+        "]}}\n"
+        "{\"exitCode\":1,\"kind\":\"result\"}\n";
+
+    const auto statuses = ParsePayloadStatusEvents(ParseNdjsonLines(status_raw));
+    Check(statuses.size() == 5, "ParsePayloadStatusEvents parses all targets including error entry");
+    Check(!statuses[0].error.empty() && statuses[0].request == "local:node" && !statuses[0].installed_revision.has_value(),
+          "ParsePayloadStatusEvents captures unindexed error item");
+    Check(statuses[1].request == "xim:bwrap" && statuses[1].installed_revision == std::optional<int>(0) &&
+              statuses[1].revision == 1 && !statuses[1].current,
+          "ParsePayloadStatusEvents captures revision delta");
+    Check(statuses[3].request == "xim:pnpm" && !statuses[3].installed_revision.has_value() &&
+              statuses[3].version == "12.22.0",
+          "ParsePayloadStatusEvents handles null installed_revision");
+
+    const std::vector<PkgGroup> groups{
+        PkgGroup{
+            .key = "local:node",
+            .ns = "local",
+            .name = "node",
+            .active_version = "",
+            .versions = {InstalledPkg{.raw_spec = "local:node@26.13.0", .ns = "local", .name = "node", .version = "26.13.0", .is_active = false, .is_degraded = true}},
+        },
+        PkgGroup{
+            .key = "xim:bwrap",
+            .ns = "xim",
+            .name = "bwrap",
+            .active_version = "",
+            .versions = {InstalledPkg{.raw_spec = "xim:bwrap@0.11.2", .ns = "xim", .name = "bwrap", .version = "0.11.2", .is_active = false}},
+        },
+        PkgGroup{
+            .key = "xim:cmake",
+            .ns = "xim",
+            .name = "cmake",
+            .active_version = "4.5.0",
+            .versions = {InstalledPkg{.raw_spec = "xim:cmake@4.5.0", .ns = "xim", .name = "cmake", .version = "4.5.0", .is_active = true}},
+        },
+        PkgGroup{
+            .key = "xim:pnpm",
+            .ns = "xim",
+            .name = "pnpm",
+            .active_version = "12.0.0",
+            .versions = {InstalledPkg{.raw_spec = "xim:pnpm@12.0.0", .ns = "xim", .name = "pnpm", .version = "12.0.0", .is_active = true}},
+        },
+        PkgGroup{
+            .key = "xim:huxerui",
+            .ns = "xim",
+            .name = "huxerui",
+            .active_version = "0.3.0",
+            .versions = {InstalledPkg{.raw_spec = "xim:huxerui@0.3.0", .ns = "xim", .name = "huxerui", .version = "0.3.0", .is_active = true}},
+        },
+    };
+
+    const auto plans = BuildUpdatablePlans(groups, statuses);
+    Check(plans.size() == 4, "BuildUpdatablePlans excludes current xim:cmake");
+    Check(plans[0].key == "xim:huxerui" && !plans[0].is_revision_only && !plans[0].is_skipped &&
+              plans[0].current_version == "0.3.0" && plans[0].latest_version == "0.5.0",
+          "BuildUpdatablePlans orders xim:huxerui new version first");
+    Check(plans[1].key == "xim:pnpm" && !plans[1].is_revision_only && !plans[1].is_skipped &&
+              plans[1].current_version == "12.0.0" && plans[1].latest_version == "12.22.0",
+          "BuildUpdatablePlans orders xim:pnpm new version second");
+    Check(plans[2].key == "xim:bwrap" && plans[2].is_revision_only && !plans[2].is_skipped &&
+              plans[2].installed_revision == 0 && plans[2].latest_revision == 1 && plans[2].latest_version == "0.11.2",
+          "BuildUpdatablePlans orders xim:bwrap revision update third");
+    Check(plans[3].key == "local:node" && plans[3].is_skipped &&
+              plans[3].skip_reason == "package 'local:node' not found in the synced index",
+          "BuildUpdatablePlans places skipped unindexed error last with first-line reason");
+}
+
 } // namespace
 
 int main() {
@@ -251,6 +327,7 @@ int main() {
     TestLiveXlingsBinaryAndEnv();
     TestVersionCompareAndMultiActiveGrouping();
     TestParseRemovePlanEvents();
+    TestParsePayloadStatusAndUpdatablePlans();
 
     if (failures == 0) {
         std::println("All parser and xlings integration tests passed.");

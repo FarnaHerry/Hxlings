@@ -118,6 +118,21 @@ View DashboardPage() {
             true
         ),
         ActionButton(
+            "批量更新软件包",
+            ButtonTone::Secondary,
+            [dialog, store, tasks, toast] {
+                if (!store->has_scanned_updates.Get() && !store->scanning_updates.Get() && !store->skip_initial_refresh) {
+                    store->ScanUpdatablePackages(tasks);
+                }
+                dialog.Show([store, tasks, toast](DialogContext ctx) {
+                    return BatchUpdateDialogContent(ctx, store, tasks, toast);
+                });
+            },
+            true,
+            icons::DownloadIcon(),
+            true
+        ),
+        ActionButton(
             "批量清理过期版本",
             ButtonTone::Secondary,
             [dialog, store, tasks, toast] {

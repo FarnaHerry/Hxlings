@@ -73,6 +73,9 @@ public:
     State<std::vector<ExpiredPackagePlan>> expired_plans{std::vector<ExpiredPackagePlan>{}};
     State<bool> scanning_expired{false};
     State<bool> has_scanned_expired{false};
+    State<std::vector<UpdatablePackagePlan>> updatable_plans{std::vector<UpdatablePackagePlan>{}};
+    State<bool> scanning_updates{false};
+    State<bool> has_scanned_updates{false};
 
     // Store / Search
     State<std::vector<SearchPkg>> search_results{std::vector<SearchPkg>{}};
@@ -469,6 +472,10 @@ public:
                     {target}, global, activate_after_install, subos, reconfig, std::move(on_ev), std::move(ctrl));
             },
             [](const std::shared_ptr<XlingsStore>& s, TaskScope t, const CommandOutcome&) {
+                s->updatable_plans = std::vector<UpdatablePackagePlan>{};
+                s->has_scanned_updates = false;
+                s->expired_plans = std::vector<ExpiredPackagePlan>{};
+                s->has_scanned_expired = false;
                 s->RefreshAll(t);
             }
         );
@@ -649,6 +656,126 @@ public:
         ExecuteBatchRemovalSteps(tasks, toast, title, std::move(steps));
     }
 
+    void ScanUpdatablePackages(TaskScope tasks) {
+        if (scanning_updates.Get()) return;
+        scanning_updates = true;
+
+        const bool already_loaded = initial_loaded.Get();
+        std::vector<PkgGroup> groups = installed_groups.Get();
+
+        auto self = shared_from_this();
+        const XlingsClient client = client_;
+        tasks.Launch([self, client, already_loaded, groups = std::move(groups)]() mutable -> Task<void> {
+            auto results = co_await RunWorker([client, already_loaded, groups = std::move(groups)]() mutable {
+                if (groups.empty() && !already_loaded) {
+                    groups = GroupInstalledPackages(client.ListInstalledPackages());
+                }
+                std::vector<std::string> targets;
+                targets.reserve(groups.size());
+                for (const auto& g : groups) {
+                    if (g.key.empty()) continue;
+                    if (std::ranges::find(targets, g.key) == targets.end()) {
+                        targets.push_back(g.key);
+                    }
+                }
+                if (targets.empty()) return std::vector<UpdatablePackagePlan>{};
+                const auto statuses = client.QueryPayloadStatus(targets);
+                return BuildUpdatablePlans(groups, statuses);
+            });
+
+            self->updatable_plans = std::move(results);
+            self->scanning_updates = false;
+            self->has_scanned_updates = true;
+        });
+    }
+
+    void SyncIndexAndScanUpdatesAsync(TaskScope tasks, ToastHandle toast) {
+        const XlingsClient client = client_;
+        ExecuteOperation(
+            tasks,
+            toast,
+            "同步包索引并检查更新",
+            [client](auto on_ev, auto, auto ctrl) {
+                return client.UpdatePackages({}, std::move(on_ev), std::move(ctrl));
+            },
+            [](const std::shared_ptr<XlingsStore>& s, TaskScope t, const CommandOutcome&) {
+                s->updatable_plans = std::vector<UpdatablePackagePlan>{};
+                s->has_scanned_updates = false;
+                s->RefreshAll(t);
+                s->ScanUpdatablePackages(t);
+            }
+        );
+    }
+
+    void BatchUpdatePackagesAsync(
+        TaskScope tasks,
+        ToastHandle toast,
+        std::vector<UpdatablePackagePlan> targets,
+        bool activate_updated
+    ) {
+        struct UpdateStep {
+            std::string key;
+            std::string spec;
+            bool activate = false;
+            std::string progress_message;
+        };
+
+        std::vector<UpdateStep> steps;
+        steps.reserve(targets.size());
+        for (const auto& t : targets) {
+            if (t.is_skipped || t.key.empty() || t.latest_version.empty()) continue;
+            const std::string spec = t.key + "@" + t.latest_version;
+            const bool activate =
+                activate_updated &&
+                !t.active_version.empty() &&
+                (!t.is_revision_only || t.active_version == t.latest_version);
+            std::string msg;
+            if (t.is_revision_only) {
+                msg = "正在更新修订 " + spec + " (r" + std::to_string(t.installed_revision) +
+                      " → r" + std::to_string(t.latest_revision) + ")...";
+            } else {
+                msg = "正在更新 " + t.key + " (" +
+                      (t.current_version.empty() ? std::string("?") : t.current_version) +
+                      " → " + t.latest_version + ")...";
+            }
+            steps.push_back(UpdateStep{
+                .key = t.key,
+                .spec = spec,
+                .activate = activate,
+                .progress_message = std::move(msg),
+            });
+        }
+
+        if (steps.empty()) {
+            toast.Show("没有可更新的软件包");
+            return;
+        }
+
+        const XlingsClient client = client_;
+        const std::string title = "批量更新软件包 (" + std::to_string(steps.size()) + " 个包)";
+        const std::size_t count = steps.size();
+        ExecuteBatchSteps(
+            tasks,
+            toast,
+            title,
+            count,
+            [client, steps = std::move(steps)](std::size_t i, auto& emit_progress, auto& on_ev, auto& ctrl) {
+                emit_progress(steps[i].progress_message);
+                const CommandOutcome out = client.InstallPackages(
+                    {steps[i].spec}, false, steps[i].activate, {}, false, on_ev, ctrl
+                );
+                return std::pair<std::string, CommandOutcome>{steps[i].key, out};
+            },
+            [](const std::shared_ptr<XlingsStore>& s, TaskScope t, const CommandOutcome&) {
+                s->updatable_plans = std::vector<UpdatablePackagePlan>{};
+                s->has_scanned_updates = false;
+                s->expired_plans = std::vector<ExpiredPackagePlan>{};
+                s->has_scanned_expired = false;
+                s->RefreshAll(t);
+            }
+        );
+    }
+
     void ActivateVersionAsync(TaskScope tasks, ToastHandle toast, std::string plain_name, std::string version) {
         const XlingsClient client = client_;
         ExecuteOperation(
@@ -675,6 +802,8 @@ public:
                 return client.UpdatePackages(target, std::move(on_ev), std::move(ctrl));
             },
             [](const std::shared_ptr<XlingsStore>& s, TaskScope t, const CommandOutcome&) {
+                s->updatable_plans = std::vector<UpdatablePackagePlan>{};
+                s->has_scanned_updates = false;
                 s->RefreshAll(t);
             }
         );
@@ -967,43 +1096,43 @@ private:
         std::string progress_message;
     };
 
-    void ExecuteBatchRemovalSteps(
+    template <class StepFn, class AfterFn>
+    void ExecuteBatchSteps(
         TaskScope tasks,
         ToastHandle toast,
         std::string title,
-        std::vector<RemovalStep> steps
+        std::size_t step_count,
+        StepFn step_fn,
+        AfterFn after_fn
     ) {
-        if (steps.empty()) return;
-        const XlingsClient client = client_;
+        if (step_count == 0) return;
         ExecuteOperation(
             tasks,
             toast,
             std::move(title),
-            [client, steps = std::move(steps)](auto on_ev, auto, auto ctrl) -> CommandOutcome {
+            [step_count, step_fn = std::move(step_fn)](auto on_ev, auto, auto ctrl) -> CommandOutcome {
                 CommandOutcome combined;
                 std::size_t succeeded = 0;
                 std::size_t failed = 0;
                 bool cancelled = false;
                 std::string last_error;
 
-                for (std::size_t i = 0; i < steps.size(); ++i) {
+                for (std::size_t i = 0; i < step_count; ++i) {
                     if (ctrl && ctrl->cancel_requested.load(std::memory_order_acquire)) {
                         cancelled = true;
                         break;
                     }
                     if (ctrl) ctrl->pid.store(-1, std::memory_order_release);
 
-                    {
+                    auto emit_progress = [&](const std::string& msg) {
                         NdjsonEvent prog;
                         prog.kind = "progress";
-                        prog.progress_percent = static_cast<float>(i) / static_cast<float>(steps.size());
-                        prog.message = steps[i].progress_message;
+                        prog.progress_percent = static_cast<float>(i) / static_cast<float>(step_count);
+                        prog.message = msg;
                         on_ev(prog);
-                    }
+                    };
 
-                    const CommandOutcome step_out = client.RemovePackage(
-                        steps[i].target, steps[i].older_than, false, on_ev, ctrl
-                    );
+                    const auto [target_label, step_out] = step_fn(i, emit_progress, on_ev, ctrl);
                     if (ctrl && ctrl->cancel_requested.load(std::memory_order_acquire)) {
                         cancelled = true;
                         if (step_out.ok) {
@@ -1018,9 +1147,9 @@ private:
                     } else {
                         ++failed;
                         if (!step_out.error_message.empty()) {
-                            last_error = steps[i].target + ": " + step_out.error_message;
+                            last_error = target_label + ": " + step_out.error_message;
                         } else {
-                            last_error = steps[i].target + ": exit code " + std::to_string(step_out.exit_code);
+                            last_error = target_label + ": exit code " + std::to_string(step_out.exit_code);
                         }
                     }
                 }
@@ -1029,13 +1158,38 @@ private:
                 combined.exit_code = combined.ok ? 0 : 1;
                 if (cancelled) {
                     combined.error_message =
-                        "已取消 (已完成 " + std::to_string(succeeded) + "/" + std::to_string(steps.size()) + ")";
+                        "已取消 (已完成 " + std::to_string(succeeded) + "/" + std::to_string(step_count) + ")";
                 } else if (failed > 0) {
                     combined.error_message =
                         "完成 " + std::to_string(succeeded) + " 项，" + std::to_string(failed) +
                         " 项失败" + (last_error.empty() ? std::string{} : (" (" + last_error + ")"));
                 }
                 return combined;
+            },
+            std::move(after_fn)
+        );
+    }
+
+    void ExecuteBatchRemovalSteps(
+        TaskScope tasks,
+        ToastHandle toast,
+        std::string title,
+        std::vector<RemovalStep> steps
+    ) {
+        if (steps.empty()) return;
+        const XlingsClient client = client_;
+        const std::size_t count = steps.size();
+        ExecuteBatchSteps(
+            tasks,
+            toast,
+            std::move(title),
+            count,
+            [client, steps = std::move(steps)](std::size_t i, auto& emit_progress, auto& on_ev, auto& ctrl) {
+                emit_progress(steps[i].progress_message);
+                const CommandOutcome step_out = client.RemovePackage(
+                    steps[i].target, steps[i].older_than, false, on_ev, ctrl
+                );
+                return std::pair<std::string, CommandOutcome>{steps[i].target, step_out};
             },
             [](const std::shared_ptr<XlingsStore>& s, TaskScope t, const CommandOutcome&) {
                 s->expired_plans = std::vector<ExpiredPackagePlan>{};

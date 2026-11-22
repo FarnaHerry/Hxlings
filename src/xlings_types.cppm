@@ -277,6 +277,39 @@ struct ExpiredPackagePlan {
     bool operator==(const ExpiredPackagePlan&) const = default;
 };
 
+struct PayloadStatusItem {
+    std::string request;
+    std::string ns;
+    std::string name;
+    std::string version;
+    std::string origin;
+    std::string payload_dir;
+    std::string error;
+    int revision = 0;
+    std::optional<int> installed_revision;
+    bool complete = false;
+    bool current = false;
+    bool usable = false;
+
+    bool operator==(const PayloadStatusItem&) const = default;
+};
+
+struct UpdatablePackagePlan {
+    std::string key;
+    std::string ns;
+    std::string name;
+    std::string current_version;
+    std::string active_version;
+    std::string latest_version;
+    int installed_revision = 0;
+    int latest_revision = 0;
+    bool is_revision_only = false;
+    bool is_skipped = false;
+    std::string skip_reason;
+
+    bool operator==(const UpdatablePackagePlan&) const = default;
+};
+
 struct NdjsonEvent {
     std::string kind;
     std::string data_kind;

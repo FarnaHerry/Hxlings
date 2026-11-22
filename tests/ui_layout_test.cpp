@@ -308,6 +308,51 @@ std::shared_ptr<XlingsStore> MakeSeededStore() {
         },
     };
 
+    store->has_scanned_updates = true;
+    store->updatable_plans = {
+        UpdatablePackagePlan{
+            .key = "xim:huxerui",
+            .ns = "xim",
+            .name = "huxerui",
+            .current_version = "0.3.0",
+            .active_version = "0.3.0",
+            .latest_version = "0.5.0",
+            .is_revision_only = false,
+            .is_skipped = false,
+        },
+        UpdatablePackagePlan{
+            .key = "xim:pnpm",
+            .ns = "xim",
+            .name = "pnpm",
+            .current_version = "12.0.0",
+            .active_version = "12.0.0",
+            .latest_version = "12.22.0",
+            .is_revision_only = false,
+            .is_skipped = false,
+        },
+        UpdatablePackagePlan{
+            .key = "xim:bwrap",
+            .ns = "xim",
+            .name = "bwrap",
+            .current_version = "0.11.2",
+            .active_version = "",
+            .latest_version = "0.11.2",
+            .installed_revision = 0,
+            .latest_revision = 1,
+            .is_revision_only = true,
+            .is_skipped = false,
+        },
+        UpdatablePackagePlan{
+            .key = "local:node",
+            .ns = "local",
+            .name = "node",
+            .current_version = "26.13.0",
+            .active_version = "",
+            .is_skipped = true,
+            .skip_reason = "package 'local:node' not found in the synced index",
+        },
+    };
+
     store->has_searched = true;
     store->search_results = {
         SearchPkg{.package = "xim:gcc", .ns = "xim", .name = "gcc", .version = "16.1.0",
@@ -856,6 +901,59 @@ void AuditAllPagesAtViewport(
                 );
             } catch (const UiTestFailure& ex) {
                 ctx.Flag(vp_tag + " / BatchPruneDialog", std::string("BatchPruneDialog still mounted after cancel: ") + ex.what());
+            }
+        }
+    }
+
+    if (SafeTap(ctx, vp_tag + " / BatchUpdateDialog", ui.Find(UiSelector::Text("批量更新")), "批量更新")) {
+        ui.Pump(500ms);
+        ui.Pump();
+        const auto upd_nodes = ui.Find(UiSelector::Text("批量更新软件包")).All();
+        const bool upd_visible = std::ranges::any_of(
+            upd_nodes,
+            [](const UiNodeInfo& n) { return n.participates_in_layout && n.in_viewport; }
+        );
+        if (!upd_visible) {
+            ctx.Flag(vp_tag + " / BatchUpdateDialog", "BatchUpdateDialog content not visible in viewport");
+        }
+        AuditCurrentScreen(ctx, ui, w, h, "BatchUpdateDialog", "page-packages", false, true);
+
+        const auto upd_exec_sel = UiSemanticSelector::AllOf(
+            UiSemanticSelector::Role(SemanticRole::Button),
+            UiSemanticSelector::Label("执行批量更新")
+        );
+        const auto upd_exec_sem = ui.FindSemantics(upd_exec_sel);
+        if (!upd_exec_sem.Exists() || !upd_exec_sem.One().enabled) {
+            ctx.Flag(vp_tag + " / BatchUpdateDialog",
+                     "执行批量更新 should be enabled by default even when a skipped package is present");
+        }
+        if (SafeTap(ctx, vp_tag + " / BatchUpdateDialog", ui.Find(UiSelector::Text("全不选")), "全不选(BatchUpdateDialog)")) {
+            ui.Pump();
+            if (!ui.FindSemantics(upd_exec_sel).Exists() || ui.FindSemantics(upd_exec_sel).One().enabled) {
+                ctx.Flag(vp_tag + " / BatchUpdateDialog", "执行批量更新 should be disabled after 全不选");
+            }
+        }
+        if (SafeTap(ctx, vp_tag + " / BatchUpdateDialog", ui.Find(UiSelector::Text("全选")), "全选(BatchUpdateDialog)")) {
+            ui.Pump();
+            if (!ui.FindSemantics(upd_exec_sel).Exists() || !ui.FindSemantics(upd_exec_sel).One().enabled) {
+                ctx.Flag(vp_tag + " / BatchUpdateDialog", "执行批量更新 should be re-enabled after 全选");
+            }
+        }
+
+        if (SafeTap(ctx, vp_tag + " / BatchUpdateDialog", ui.Find(UiSelector::Text("取消")), "取消(BatchUpdateDialog)")) {
+            try {
+                ui.PumpUntil(
+                    [&] {
+                        return !ui.Find(UiSelector::Text("执行批量更新")).Exists() &&
+                               std::ranges::none_of(
+                                   ui.Find(UiSelector::Text("批量更新软件包")).All(),
+                                   [](const UiNodeInfo& n) { return n.participates_in_layout; }
+                               );
+                    },
+                    {.timeout = 2s, .step = 50ms}
+                );
+            } catch (const UiTestFailure& ex) {
+                ctx.Flag(vp_tag + " / BatchUpdateDialog", std::string("BatchUpdateDialog still mounted after cancel: ") + ex.what());
             }
         }
     }
