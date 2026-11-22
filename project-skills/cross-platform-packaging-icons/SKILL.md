@@ -37,14 +37,16 @@ file resources/images/hxlings.png resources/images/tray_icon.png platform/window
 
 ## 3. 多平台打包、CI 检查与安全释放原则
 
-1. **打包产物矩阵**（Linux 使用 `mcpp pack hxlings --release --mode self-contained --pkg-format <fmt>`，macOS/Windows 使用 `mcpp pack hxlings --release --pkg-format <fmt>`）：
-   - Linux：`tar`、`deb`、`rpm`、`appimage`（必须传 `--mode self-contained`，随附 `lib/ld-linux-x86-64.so.2`、`lib/libc.so.6`、`lib/libm.so.6` 与 `lib/gconv/`，避免宿主机缺少 `GLIBC_2.43`/`GLIBC_2.44` 启动失败；`src/platform_icon.cppm` 启动时读取 `MCPP_BUNDLE_DIR` 自动推导并设置 `HUXERUI_RESOURCES_DIR`）
-   - Windows：`zip`、`msi`、`setup`（WiX Burn）
-   - macOS：`tar`、`dmg`
+1. **打包产物矩阵**：
+   - Linux（`.deb` / `.rpm` 使用 `mcpp pack hxlings --release --mode system --pkg-format <fmt>`）：直接依赖发行版原生库（`deb` 声明 `libgtk-4-1 (>= 4.14)` / `libepoxy0 (>= 1.5)` / `libsoup-3.0-0 (>= 3.0)` 等，`rpm` 声明 `lib*.so.*()(64bit)`）。[build.mcpp](../../build.mcpp) 通过生成 `glibc_compat_x86_64.c`（`--wrap=sqrtf/atan2f/remainder` 绑定 `GLIBC_2.2.5`）将可执行文件最高符号版本压到 `GLIBC_2.38`。
+   - Linux（`.tar.gz` / `.AppImage` 使用 `mcpp pack hxlings --release --mode self-contained --pkg-format <fmt>`）：随附 `lib/ld-linux-x86-64.so.2`、`lib/libc.so.6`、`lib/libm.so.6` 与 `lib/gconv/`；必须在随附加载器 `--library-path` 中将宿主 GPU 搜索路径追加在 `$here/lib` 之后（`AppImage` 由 `build.mcpp` 自动修补 `stage/hxlings` 与 `stage/run.sh`，`tar` 由 CI 重封装修补），否则 `libepoxy` 无法 `dlopen` 宿主 OpenGL 驱动导致 GTK4 退化为 `GskCairoRenderer` 粉色块；同时 `src/platform_icon.cppm` 通过 `MCPP_BUNDLE_DIR` 自动设置 `HUXERUI_RESOURCES_DIR`。
+   - Windows：`zip`、`msi`、`setup`（WiX Burn，无需 `--mode`）
+   - macOS：`tar`、`dmg`（无需 `--mode`）
 2. **CI 归档检查要点（`.github/workflows/ci.yml`）**：
    - `set -o pipefail` 下禁止 `tar -tzf ... | grep -q`（会触发 SIGPIPE 141），应先存入变量再过滤检查。
    - Linux `tar`/`deb`、macOS `tar`、Windows `msi` 文件表必须同时包含 `huxerui/resources.bin`、`app/images/hxlings.png`、`app/images/tray_icon.png`。
-   - Linux 自包含门禁：校验 `tar`/`deb`/`AppImage` 包含 `lib/ld-linux-x86-64.so.2`、`lib/libc.so.6`、`lib/libm.so.6`、`lib/gconv/` 与 `MCPP_BUNDLE_DIR` 启动封装器，且用随附 `ld-linux-x86-64.so.2 --library-path "$top/lib" --list "$top/bin/hxlings"` 确认 `libc.so.6` 与 `libm.so.6` 全部解析至包内目录而非宿主 `/lib*`。
+   - Linux `.deb`/`.rpm` 原生依赖门禁：校验不打包 `libc.so.6`/`libgtk-4.so.1`、声明了发行版依赖，且在 `ubuntu-24.04` 实装 `.deb` 并确认 `readelf -V` 无 `GLIBC_2.39+`、`/usr/bin/ldd` 全部正常解析。
+   - Linux 自包含 `.tar.gz`/`.AppImage` 门禁：校验 `lib/ld-linux-x86-64.so.2`、`lib/libc.so.6`、`lib/libm.so.6`、`lib/gconv/`、`MCPP_BUNDLE_DIR` 与 `/usr/lib/x86_64-linux-gnu:/usr/lib64` 均存在，且随附链接器 `--list` 全量解析无 `not found`。
 3. **本地打包烟测与发布**：
    ```bash
    mcpp pack hxlings --release --mode self-contained --pkg-format tar --output /tmp/hxlings-check.tar.gz

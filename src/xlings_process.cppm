@@ -95,7 +95,7 @@ std::vector<std::pair<std::string, std::optional<std::string>>> BuildSanitizedEn
     }
 
     if constexpr (os::is_posix) {
-        for (const char* path_var : {"GCONV_PATH", "LD_LIBRARY_PATH"}) {
+        for (const char* path_var : {"GCONV_PATH", "LOCPATH", "LD_LIBRARY_PATH"}) {
             if (const auto val = os::env::get(path_var); val && !val->empty()) {
                 bool contaminated = false;
                 ForEachColonSegment(*val, [&](std::string_view token) {

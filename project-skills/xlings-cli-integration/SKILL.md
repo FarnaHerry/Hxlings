@@ -14,7 +14,7 @@ description: >-
 ## 1. 子进程解析与环境隔离（`src/xlings_process.cppm`）
 
 1. **二进制发现顺序**：`HXLINGS_BIN` 环境变量 -> `PATH`（跳过含 `/.mcpp/registry` 或 `\.mcpp\registry` 的条目）-> `~/.xlings/subos/current/bin/xlings` -> `~/.xlings/bin/xlings` ->（macOS）Homebrew 标准路径。
-2. **环境清理**：启动子进程前剔除指向 `.mcpp/registry` 的 `XLINGS_HOME`、`XLINGS_DATA`、`XLINGS_SUBOS`，防止 `mcpp run` 环境下管理错目录；同时剔除自包含包封装器注入的 `MCPP_BUNDLE_DIR`，并在 POSIX 下清理指向包前缀或 `.mcpp/registry` 的 `GCONV_PATH` 与 `LD_LIBRARY_PATH` 条目（避免宿主工具加载包内 glibc 2.44 模块失败）。
+2. **环境清理**：启动子进程前剔除指向 `.mcpp/registry` 的 `XLINGS_HOME`、`XLINGS_DATA`、`XLINGS_SUBOS`，防止 `mcpp run` 环境下管理错目录；同时剔除自包含包封装器注入的 `MCPP_BUNDLE_DIR`，并在 POSIX 下清理指向包前缀或 `.mcpp/registry` 的 `GCONV_PATH`、`LOCPATH` 与 `LD_LIBRARY_PATH` 条目（避免宿主工具加载包内 glibc 2.44 模块失败）。
 3. **可取消流式执行**：长耗时写操作统一通过 `RunProcessStreaming` + `ActiveProcessControl` 传入 `XlingsStore::ExecuteOperation`，在任务控制台支持取消与实时进度反馈。
 
 ## 2. 命令耗时特征与分层加载原则

@@ -46,4 +46,8 @@
 
 12. **Linux `mcpp pack --mode vendored` 依赖宿主 `/lib64/libm.so.6` 导致 `GLIBC_2.44` 启动失败**
     - **现象**：Linux 包基于 `xim:*`（如 `libsqlite3.so.0` 要 `GLIBC_2.44`、`libgtk-4.so.1`/`libglib-2.0.so.0` 要 `GLIBC_2.43`）构建；默认 `vendored` 不带 `libc.so.6`/`libm.so.6`/`ld-linux-x86-64.so.2`，安装到宿主 Linux 后因宿主 glibc 更旧而无法启动。
-    - **解决**：Linux 打包全部使用 `--mode self-contained`；因随附动态链接器启动使 `/proc/self/exe` 指向 `ld-linux-x86-64.so.2`，需在 `PreparePlatformStartup()` 与 `ResolveAppIconPngPath()` 读取 `MCPP_BUNDLE_DIR` 设置 `HUXERUI_RESOURCES_DIR`，并在 `src/xlings_process.cppm` 清理自包含封装器导出的 `GCONV_PATH`、`LD_LIBRARY_PATH` 与 `MCPP_BUNDLE_DIR`。
+    - **解决**：`.tar.gz` 与 `.AppImage` 使用 `--mode self-contained` 并由 `MCPP_BUNDLE_DIR` 推导 `HUXERUI_RESOURCES_DIR`，且在 `src/xlings_process.cppm` 清理 `GCONV_PATH`、`LOCPATH`、`LD_LIBRARY_PATH` 与 `MCPP_BUNDLE_DIR`；`.deb` 与 `.rpm` 则改用 `--mode system` 声明发行版原生 GTK4 依赖，同时 `build.mcpp` 生成 `glibc_compat_x86_64.c`（`--wrap=sqrtf/atan2f/remainder` 绑定 `GLIBC_2.2.5`）将可执行文件最高符号版本降至 `GLIBC_2.38`。
+
+13. **Linux `--mode self-contained` 找不到宿主 `libGL`/`libGLX_mesa` 退化为 GTK4 Cairo 粉色方块**
+    - **现象**：自包含包默认的 `ld-linux-x86-64.so.2 --library-path "$here/lib"` 不读宿主 `/etc/ld.so.cache` 与 `/lib64`，导致 `libepoxy` `dlopen(libEGL/libGL)` 失败（`Not using GL: libEGL not available`），GTK4 退化为 `GskCairoRenderer` 并把 `gtk_snapshot_push_fill` 节点渲染成 `#FF69B4` 粉色矩形。
+    - **解决**：将 `--library-path` 修补为 `"$here/lib:/usr/lib/x86_64-linux-gnu:/usr/lib64:/lib/x86_64-linux-gnu:/lib64"`（包内优先、宿主 GPU 库兜底），使 GTK4 正常启用 `GskNglRenderer`（`AppImage` 在 `build.mcpp` 修补，`tar` 在 CI 重打包修补）。

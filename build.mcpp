@@ -4,9 +4,114 @@ import huxerui.rules;
 
 namespace {
 
+void write_if_different(const std::filesystem::path& path, std::string_view bytes) {
+    std::error_code ec;
+    std::filesystem::create_directories(path.parent_path(), ec);
+    if (std::ifstream in(path, std::ios::binary); in) {
+        const std::string existing(
+            (std::istreambuf_iterator<char>(in)),
+            std::istreambuf_iterator<char>());
+        if (existing == bytes) return;
+    }
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    if (out) {
+        out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+    }
+}
+
+void configure_linux_glibc_compat() {
+    if (std::string_view(mcpp::target_os()) != "linux" ||
+        std::string_view(mcpp::target_arch()) != "x86_64") {
+        return;
+    }
+    const std::filesystem::path shim_path =
+        std::filesystem::path(mcpp::out_dir()) / "glibc_compat_x86_64.c";
+    constexpr std::string_view kShimSource =
+        "float __compat_sqrtf(float x);\n"
+        "float __compat_atan2f(float y, float x);\n"
+        "double __compat_remainder(double x, double y);\n"
+        "__asm__(\".symver __compat_sqrtf,sqrtf@GLIBC_2.2.5\");\n"
+        "__asm__(\".symver __compat_atan2f,atan2f@GLIBC_2.2.5\");\n"
+        "__asm__(\".symver __compat_remainder,remainder@GLIBC_2.2.5\");\n"
+        "float __wrap_sqrtf(float x) { return __compat_sqrtf(x); }\n"
+        "float __wrap_atan2f(float y, float x) { return __compat_atan2f(y, x); }\n"
+        "double __wrap_remainder(double x, double y) { return __compat_remainder(x, y); }\n";
+    write_if_different(shim_path, kShimSource);
+    mcpp::source(shim_path.string().c_str());
+    mcpp::link_lib("m");
+    mcpp::link_flag("-Wl,--wrap=sqrtf");
+    mcpp::link_flag("-Wl,--wrap=atan2f");
+    mcpp::link_flag("-Wl,--wrap=remainder");
+}
+
+void patch_linux_self_contained_launcher() {
+    if (std::string_view(mcpp::target_os()) != "linux" ||
+        std::string_view(mcpp::pack_format()) != "appimage") {
+        return;
+    }
+    const std::string stage_str = mcpp::pack_stage_dir();
+    if (stage_str.empty()) return;
+
+    const std::filesystem::path stage(stage_str);
+    constexpr std::string_view kOldFlag = "--library-path \"$here/lib\"";
+    constexpr std::string_view kNewFlag =
+        "--library-path \"$here/lib:/usr/lib/x86_64-linux-gnu:/usr/lib64:/lib/x86_64-linux-gnu:/lib64\"";
+    for (const char* name : {"hxlings", "run.sh"}) {
+        const std::filesystem::path file = stage / name;
+        std::ifstream in(file, std::ios::binary);
+        if (!in) continue;
+        std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        in.close();
+        if (text.find("/usr/lib64") != std::string::npos) continue;
+        const std::size_t pos = text.find(kOldFlag);
+        if (pos == std::string::npos) continue;
+        text.replace(pos, kOldFlag.size(), kNewFlag);
+        write_if_different(file, text);
+        std::error_code ec;
+        std::filesystem::permissions(
+            file,
+            std::filesystem::perms::owner_exec | std::filesystem::perms::group_exec |
+                std::filesystem::perms::others_exec,
+            std::filesystem::perm_options::add,
+            ec);
+    }
+}
+
 huxerui::rules::options make_rules_options() {
     huxerui::rules::options opt{};
     opt.package.categories = {"Development", "Utility"};
+    if (std::string_view(mcpp::target_os()) == "linux") {
+        const std::string_view fmt = mcpp::pack_format();
+        if (fmt == "deb") {
+            opt.package.depends = {
+                "libgtk-4-1 (>= 4.14)",
+                "libepoxy0 (>= 1.5)",
+                "libsoup-3.0-0 (>= 3.0)",
+                "libpangoft2-1.0-0",
+                "libfontconfig1",
+            };
+        } else if (fmt == "rpm") {
+            opt.package.depends = {
+                "libgtk-4.so.1()(64bit)",
+                "libepoxy.so.0()(64bit)",
+                "libsoup-3.0.so.0()(64bit)",
+                "libpangoft2-1.0.so.0()(64bit)",
+                "libfontconfig.so.1()(64bit)",
+                "libpangocairo-1.0.so.0()(64bit)",
+                "libpango-1.0.so.0()(64bit)",
+                "libcairo.so.2()(64bit)",
+                "libcairo-gobject.so.2()(64bit)",
+                "libgdk_pixbuf-2.0.so.0()(64bit)",
+                "libgraphene-1.0.so.0()(64bit)",
+                "libharfbuzz.so.0()(64bit)",
+                "libgio-2.0.so.0()(64bit)",
+                "libgobject-2.0.so.0()(64bit)",
+                "libglib-2.0.so.0()(64bit)",
+                "libgmodule-2.0.so.0()(64bit)",
+                "libfreetype.so.6()(64bit)",
+            };
+        }
+    }
     return opt;
 }
 
@@ -108,7 +213,12 @@ bool configure_macos() {
 } // namespace
 
 int main() {
-    const bool configured = std::string_view(mcpp::target_os()) == "macos"
+    const bool is_macos = std::string_view(mcpp::target_os()) == "macos";
+    if (!is_macos) {
+        configure_linux_glibc_compat();
+        patch_linux_self_contained_launcher();
+    }
+    const bool configured = is_macos
         ? configure_macos()
         : huxerui::rules::configure(make_rules_options());
     if (!configured) return 1;

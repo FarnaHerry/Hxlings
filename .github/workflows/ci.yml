@@ -118,6 +118,28 @@ jobs:
           tar_out="dist/hxlings-${pkg_version}-linux-x86_64.tar.gz"
           mcpp pack hxlings --release --mode self-contained --pkg-format tar --output "$tar_out"
           test -s "$tar_out"
+
+          tar_repack_dir="$RUNNER_TEMP/hxlings-tar-repack"
+          rm -rf "$tar_repack_dir" && mkdir -p "$tar_repack_dir"
+          tar -xzf "$tar_out" -C "$tar_repack_dir"
+          tar_top=$(find "$tar_repack_dir" -mindepth 1 -maxdepth 1 -type d | head -n 1)
+          test -d "$tar_top"
+          for launcher in "$tar_top/hxlings" "$tar_top/run.sh"; do
+            if [ -f "$launcher" ]; then
+              python3 -c '
+import pathlib, sys
+p = pathlib.Path(sys.argv[1])
+old = "--library-path \"$here/lib\""
+new = "--library-path \"$here/lib:/usr/lib/x86_64-linux-gnu:/usr/lib64:/lib/x86_64-linux-gnu:/lib64\""
+text = p.read_text()
+assert old in text, f"missing expected library-path flag in {p}"
+p.write_text(text.replace(old, new))
+' "$launcher"
+              chmod +x "$launcher"
+            fi
+          done
+          tar -C "$tar_repack_dir" -czf "$tar_out" "$(basename "$tar_top")"
+
           tar_list=$(tar -tzf "$tar_out")
           printf '%s\n' "$tar_list" | grep -q 'hxlings.resources/huxerui/resources.bin'
           printf '%s\n' "$tar_list" | grep -q 'hxlings\.resources/huxerui/app/images/hxlings\.png'
@@ -128,41 +150,51 @@ jobs:
           printf '%s\n' "$tar_list" | grep -q 'lib/libm\.so\.6'
           printf '%s\n' "$tar_list" | grep -q 'lib/gconv/'
 
-          tar_check_dir="$RUNNER_TEMP/hxlings-tar-check"
-          rm -rf "$tar_check_dir" && mkdir -p "$tar_check_dir"
-          tar -xzf "$tar_out" -C "$tar_check_dir"
-          tar_top=$(find "$tar_check_dir" -mindepth 1 -maxdepth 1 -type d | head -n 1)
-          test -d "$tar_top"
           grep -q 'MCPP_BUNDLE_DIR' "$tar_top/hxlings"
           grep -q 'ld-linux-x86-64.so.2' "$tar_top/hxlings"
-          ldd_out=$("$tar_top/lib/ld-linux-x86-64.so.2" --library-path "$tar_top/lib" --list "$tar_top/bin/hxlings")
+          grep -Fq '/usr/lib/x86_64-linux-gnu:/usr/lib64' "$tar_top/hxlings"
+          ldd_out=$("$tar_top/lib/ld-linux-x86-64.so.2" --library-path "$tar_top/lib:/usr/lib/x86_64-linux-gnu:/usr/lib64:/lib/x86_64-linux-gnu:/lib64" --list "$tar_top/bin/hxlings")
           ! printf '%s\n' "$ldd_out" | grep -q 'not found'
           printf '%s\n' "$ldd_out" | grep -E 'libc\.so\.6 => ' | grep -Fq "$tar_top/"
           printf '%s\n' "$ldd_out" | grep -E 'libm\.so\.6 => ' | grep -Fq "$tar_top/"
-          ! printf '%s\n' "$ldd_out" | grep -E '=> /(lib|lib64|usr/lib|usr/lib64)/'
-          rm -rf "$tar_check_dir"
+          printf '%s\n' "$ldd_out" | grep -E 'libgtk-4\.so\.1 => ' | grep -Fq "$tar_top/"
+          rm -rf "$tar_repack_dir"
 
-          deb_src=$(mcpp pack hxlings --release --mode self-contained --pkg-format deb --message-format json | extract_pack_path)
+          deb_src=$(mcpp pack hxlings --release --mode system --pkg-format deb --message-format json | extract_pack_path)
           test -s "$deb_src"
           deb_out="dist/hxlings-${pkg_version}-linux-x86_64.deb"
           cp "$deb_src" "$deb_out"
           dpkg-deb -I "$deb_out"
+          deb_depends=$(dpkg-deb -f "$deb_out" Depends)
+          echo "$deb_depends" | grep -Fq 'libgtk-4-1 (>= 4.14)'
+          echo "$deb_depends" | grep -Fq 'libepoxy0 (>= 1.5)'
+          echo "$deb_depends" | grep -Fq 'libsoup-3.0-0 (>= 3.0)'
           deb_list=$(dpkg-deb -c "$deb_out")
           echo "$deb_list" | grep -q '/usr/bin/hxlings'
           echo "$deb_list" | grep -q 'hxlings\.resources/huxerui/resources\.bin'
           echo "$deb_list" | grep -q 'hxlings\.resources/huxerui/app/images/hxlings\.png'
           echo "$deb_list" | grep -q 'hxlings\.resources/huxerui/app/images/tray_icon\.png'
-          echo "$deb_list" | grep -q '/opt/hxlings/lib/ld-linux-x86-64\.so\.2'
-          echo "$deb_list" | grep -q '/opt/hxlings/lib/libc\.so\.6'
-          echo "$deb_list" | grep -q '/opt/hxlings/lib/libm\.so\.6'
           echo "$deb_list" | grep -q '/usr/share/applications/hxlings\.desktop'
           echo "$deb_list" | grep -q '/usr/share/icons/hicolor/scalable/apps/hxlings\.svg'
+          ! printf '%s\n' "$deb_list" | grep -Eq 'lib/(libc|libgtk-4)\.so'
 
-          rpm_src=$(mcpp pack hxlings --release --mode self-contained --pkg-format rpm --message-format json | extract_pack_path)
+          sudo apt-get update
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y "./$deb_out"
+          ! readelf -V /opt/hxlings/bin/hxlings | grep -Eq 'GLIBC_2\.(39|4[0-9])'
+          sys_ldd=$(/usr/bin/ldd /opt/hxlings/bin/hxlings)
+          ! printf '%s\n' "$sys_ldd" | grep -qiE 'not found|version .* not found'
+          printf '%s\n' "$sys_ldd" | grep -E 'libgtk-4\.so\.1 => /(usr/)?lib'
+
+          rpm_src=$(mcpp pack hxlings --release --mode system --pkg-format rpm --message-format json | extract_pack_path)
           test -s "$rpm_src"
           rpm_out="dist/hxlings-${pkg_version}-linux-x86_64.rpm"
           cp "$rpm_src" "$rpm_out"
           file "$rpm_out" | grep -q 'RPM'
+          test "$(stat -c%s "$rpm_out")" -lt 15000000
+          rpm_nfpm="$(dirname "$rpm_src")/linux-package/rpm/nfpm.yaml"
+          test -f "$rpm_nfpm"
+          grep -Fq 'libgtk-4.so.1()(64bit)' "$rpm_nfpm"
+          ! grep -Eq 'lib/(libc|libgtk-4)\.so' "$rpm_nfpm"
 
           app_src=$(mcpp pack hxlings --release --mode self-contained --pkg-format appimage --message-format json | extract_pack_path)
           test -s "$app_src"
@@ -178,6 +210,7 @@ jobs:
           test -f "$app_check_dir/squashfs-root/lib/libm.so.6"
           test -s "$app_check_dir/squashfs-root/bin/hxlings.resources/huxerui/resources.bin"
           grep -q 'MCPP_BUNDLE_DIR' "$app_check_dir/squashfs-root/hxlings"
+          grep -Fq '/usr/lib/x86_64-linux-gnu:/usr/lib64' "$app_check_dir/squashfs-root/hxlings"
           rm -rf "$app_check_dir"
 
           ls -lh dist
