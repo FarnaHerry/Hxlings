@@ -2,8 +2,110 @@ import std;
 import mcpp;
 import huxerui.rules;
 
+namespace {
+
+// Mirror huxerui::rules::configure({}) on macOS while omitting dev-time
+// `bundle:*` edges that reference ${mcpp.target_file:<program>} and break
+// `mcpp test` when only test targets are built. Deployed HuxerUI/ resources
+// and release packaging via mcpp::dist::apple remain active.
+bool configure_macos() {
+    const std::string root = huxerui::rules::sdk_root();
+    if (root.empty()) {
+        std::cerr << "huxerui.rules: cannot locate the HuxerUI SDK root\n";
+        return false;
+    }
+
+    const std::filesystem::path manifest = mcpp::manifest_dir();
+    std::vector<std::string> selected;
+    std::error_code ec;
+    for (auto it = std::filesystem::recursive_directory_iterator(manifest / "src", ec);
+         it != std::filesystem::recursive_directory_iterator(); ++it) {
+        if (!it->is_regular_file(ec)) continue;
+        const std::filesystem::path ext = it->path().extension();
+        if (ext != ".cpp" && ext != ".cppm") continue;
+        const std::string rel = std::filesystem::relative(it->path(), manifest, ec).generic_string();
+        if (!ec && rel != "src/main.cpp") selected.push_back(rel);
+    }
+    std::ranges::sort(selected);
+
+    const bool generated_interface = huxerui::rules::plan_module_interface();
+    const bool has_module_interface = generated_interface || std::ranges::any_of(
+        selected, [](const std::string& s) { return s.ends_with(".cppm"); });
+
+    const std::string prelude =
+        root + "/buildtools/mcpp/huxerui-build-rules/include/huxerui_scope_prelude.h";
+    mcpp::include_dir((root + "/buildtools/mcpp/huxerui-build-rules/include").c_str());
+    if (!has_module_interface) {
+        mcpp::cxxflag("-include");
+        mcpp::cxxflag("typeinfo");
+        mcpp::cxxflag("-include");
+        mcpp::cxxflag(prelude.c_str());
+    }
+    mcpp::rerun_if_changed(prelude.c_str());
+    mcpp::rerun_if_changed_glob("src/**/*.cpp");
+    mcpp::rerun_if_changed_glob("src/**/*.cppm");
+
+    std::vector<huxerui::rules::edge> edges;
+    auto cg = huxerui::rules::plan_codegen(selected);
+    std::vector<std::string> transformed;
+    for (const auto& e : cg) {
+        transformed.push_back(e.inputs.empty() ? std::string{} : e.inputs[0]);
+    }
+    for (const std::string& rel : selected) {
+        const std::string abs = (manifest / rel).string();
+        if (std::ranges::find(transformed, abs) == transformed.end()) {
+            mcpp::source(abs.c_str());
+        }
+    }
+    if (!cg.empty()) {
+        mcpp::cxxflag("-Wno-unknown-attributes");
+        std::vector<std::string> seen;
+        for (const std::string& rel : selected) {
+            const std::string dir = (manifest / rel).parent_path().string();
+            if (std::ranges::find(seen, dir) == seen.end()) {
+                seen.push_back(dir);
+                mcpp::include_dir(dir.c_str());
+            }
+        }
+    }
+    edges.insert(edges.end(), cg.begin(), cg.end());
+
+    const auto graph = huxerui::rules::load_graph();
+    if (graph.is_root && !graph.programs.empty()) {
+        huxerui::rules::write_library_graph(graph);
+        huxerui::rules::write_framework_record();
+    }
+
+    const huxerui::rules::options opt{};
+    auto rs = huxerui::rules::plan_resources(opt, graph, has_module_interface);
+    bool has_resource_edges = false;
+    for (auto& e : rs) {
+        if (e.id.starts_with("bundle:")) continue;
+        has_resource_edges = true;
+        edges.push_back(std::move(e));
+    }
+    if (has_resource_edges) {
+        mcpp::include_dir((std::string(mcpp::out_dir()) + "/hrc/builtin/include").c_str());
+    }
+
+    if (!huxerui::rules::submit(edges)) return false;
+
+    bool packaged = true;
+    if (graph.is_root) {
+        for (const std::string& program : graph.programs) {
+            packaged = huxerui::rules::plan_packages(opt, program, graph) && packaged;
+        }
+    }
+    return packaged;
+}
+
+} // namespace
+
 int main() {
-    if (!huxerui::rules::configure({})) return 1;
+    const bool configured = std::string_view(mcpp::target_os()) == "macos"
+        ? configure_macos()
+        : huxerui::rules::configure({});
+    if (!configured) return 1;
 
     const std::string huxerui_root = mcpp::dep_dir("huxerui");
     if (!huxerui_root.empty()) {

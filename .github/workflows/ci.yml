@@ -172,6 +172,7 @@ jobs:
           mcpp pack hxlings --release --pkg-format tar --output dist/hxlings-macos-arm64.tar.gz
           test -s dist/hxlings-macos-arm64.tar.gz
           tar -tzf dist/hxlings-macos-arm64.tar.gz | grep -Eq '(hxlings\.resources|HuxerUI)/huxerui/resources\.bin'
+          tar -tzf dist/hxlings-macos-arm64.tar.gz | grep -q 'dropdown_indicator\.huxv'
 
       - name: Upload release archive
         if: inputs.package || github.event_name != 'pull_request'
