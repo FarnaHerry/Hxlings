@@ -98,6 +98,7 @@ jobs:
           mcpp pack hxlings --release --pkg-format tar --output dist/hxlings-linux-x86_64.tar.gz
           test -s dist/hxlings-linux-x86_64.tar.gz
           tar -tzf dist/hxlings-linux-x86_64.tar.gz | grep -q 'hxlings.resources/huxerui/resources.bin'
+          tar -tzf dist/hxlings-linux-x86_64.tar.gz | grep -q 'dropdown_indicator\.huxv'
 
       - name: Upload release archive
         if: inputs.package || github.event_name != 'pull_request'
@@ -156,7 +157,7 @@ jobs:
         run: |
           mcpp build
           bin=$(find target -type f -name hxlings | head -1)
-          res=$(find target -path '*hxlings.resources/huxerui/resources.bin' | head -1)
+          res=$(find target \( -path '*hxlings.resources/huxerui/resources.bin' -o -path '*HuxerUI/huxerui/resources.bin' \) | head -1)
           test -x "$bin"
           test -s "$res"
           echo "built $bin with $res"
@@ -170,7 +171,7 @@ jobs:
           mkdir -p dist
           mcpp pack hxlings --release --pkg-format tar --output dist/hxlings-macos-arm64.tar.gz
           test -s dist/hxlings-macos-arm64.tar.gz
-          tar -tzf dist/hxlings-macos-arm64.tar.gz | grep -q 'hxlings.resources/huxerui/resources.bin'
+          tar -tzf dist/hxlings-macos-arm64.tar.gz | grep -Eq '(hxlings\.resources|HuxerUI)/huxerui/resources\.bin'
 
       - name: Upload release archive
         if: inputs.package || github.event_name != 'pull_request'

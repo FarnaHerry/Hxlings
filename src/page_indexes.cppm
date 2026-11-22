@@ -210,7 +210,8 @@ View IndexesPage() {
     );
 
     std::vector<View> idx_cards;
-    for (const auto& repo_idx : idx_versions) {
+    for (std::size_t ri = 0; ri < idx_versions.size(); ++ri) {
+        const auto& repo_idx = idx_versions[ri];
         std::vector<View> snap_rows;
         const std::size_t max_snaps = std::min<std::size_t>(repo_idx.snapshots.size(), 15);
         for (std::size_t i = 0; i < max_snaps; ++i) {
@@ -262,7 +263,7 @@ View IndexesPage() {
                     Border{s.current ? WithAlpha(sp.success, 0.30F) : sp.border_soft, 1.0F},
                     CornerRadius(8.0F),
                     CrossAlign(CrossAxisAlignment::Center)
-                ).Key("snap-" + repo_idx.name + "-" + s.index_version)
+                ).Key("snap-" + repo_idx.name + "-" + s.index_version + "-" + std::to_string(i))
             );
         }
 
@@ -287,7 +288,7 @@ View IndexesPage() {
                               .Style(TextStyle{.foreground = theme.colors.on_surface_variant})
                         : View(Column(std::move(snap_rows)).With(Spacing(6.0F), CrossAlign(CrossAxisAlignment::Stretch))),
                 }.With(Spacing(10.0F), CrossAlign(CrossAxisAlignment::Stretch))
-            ).Key("idx-card-" + repo_idx.name)
+            ).Key("idx-card-" + repo_idx.name + "-" + std::to_string(ri))
         );
     }
 

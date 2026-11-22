@@ -5,10 +5,15 @@ standard    = "c++23"
 description = "Desktop GUI manager for xlings built with mcpp and HuxerUI"
 license     = "MIT"
 repo        = "https://github.com/FarnaHerry/Hxlings"
+authors     = ["FarnaHerry <FarnaHerry@users.noreply.github.com>"]
 platforms   = ["linux", "windows", "macos"]
 
+[package.metadata.huxerui]
+name = "Hxlings"
+id   = "io.github.farnaherry.hxlings"
+
 [dependencies.huxerui]
-huxerui = "0.4.0"
+huxerui = { git = "https://github.com/Sunrisepeak/HuxerUI.git", branch = "feat/build-system-contract-mcpp" }
 
 [dependencies.nlohmann]
 json = "3.12.0"

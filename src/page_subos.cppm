@@ -177,7 +177,8 @@ View SubosPage() {
     );
 
     std::vector<View> subos_cards;
-    for (const auto& s : suboses) {
+    for (std::size_t i = 0; i < suboses.size(); ++i) {
+        const auto& s = suboses[i];
         const bool is_sel = s.name == selected_name;
         const bool can_delete = !s.active && s.name != "default";
 
@@ -244,7 +245,7 @@ View SubosPage() {
             .OnClick([store, tasks, event_kind, name = s.name] {
                 store->LoadSubosDetail(tasks, name, event_kind.Get());
             })
-            .Key("subos-" + s.name)
+            .Key("subos-" + s.name + "-" + std::to_string(i))
         );
     }
 
@@ -276,7 +277,8 @@ View SubosPage() {
                 for (char& ch : needle) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
 
                 std::vector<View> shim_chips;
-                for (const auto& sh : shims) {
+                for (std::size_t i = 0; i < shims.size(); ++i) {
+                    const auto& sh = shims[i];
                     if (!needle.empty()) {
                         std::string low = sh;
                         for (char& ch : low) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
@@ -287,15 +289,17 @@ View SubosPage() {
                             sh,
                             ButtonTone::Secondary,
                             [sh, clipboard, toast] {
-                                if (clipboard && clipboard->IsAvailable()) {
-                                    clipboard->WriteText(sh);
+                                if (clipboard && clipboard->SupportsSynchronousText() &&
+                                    clipboard->WriteText(sh)) {
                                     toast.Show("已复制命令: " + sh);
+                                } else {
+                                    toast.Show("复制到剪贴板失败");
                                 }
                             },
                             true,
                             std::nullopt,
                             true
-                        ).Key("shim-" + sh)
+                        ).Key("shim-" + sh + "-" + std::to_string(i))
                     );
                 }
 

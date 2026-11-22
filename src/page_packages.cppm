@@ -388,7 +388,8 @@ View PackagesPage() {
 
     std::vector<View> list_rows;
     list_rows.reserve(filtered.size());
-    for (const auto& g : filtered) {
+    for (std::size_t i = 0; i < filtered.size(); ++i) {
+        const auto& g = filtered[i];
         const bool is_sel = g.key == selected_key;
         const Color row_bg = is_sel ? theme.colors.primary_container : sp.card_bg;
         const Color row_border = is_sel ? theme.colors.primary : sp.border_soft;
@@ -439,7 +440,7 @@ View PackagesPage() {
                 CrossAlign(CrossAxisAlignment::Stretch)
             )
             .OnClick([store, tasks, g] { store->LoadInstalledDetail(tasks, g); })
-            .Key(g.key)
+            .Key("pkg-" + g.key + "-" + std::to_string(i))
         );
     }
 
@@ -884,7 +885,7 @@ View PackagesPage() {
                         true,
                         std::nullopt,
                         true
-                    ).Key("avail-" + av)
+                    ).Key("avail-" + av + "-" + std::to_string(i))
                 );
             }
             detail_sections.push_back(

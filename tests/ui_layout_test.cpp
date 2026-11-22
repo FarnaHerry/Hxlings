@@ -54,16 +54,31 @@ private:
 
 std::filesystem::path ResolveResourcesRoot(const char* argv0) {
     std::error_code ec;
+    const auto probe_base = [&](const std::filesystem::path& base) -> std::optional<std::filesystem::path> {
+        if (base.empty()) return std::nullopt;
+        for (const char* sub : {
+                 "hxlings.resources",
+                 "HuxerUI",
+                 "hxlings.app/Contents/Resources/HuxerUI",
+             }) {
+            const std::filesystem::path p = base / sub;
+            if (std::filesystem::exists(p / "huxerui" / "resources.bin", ec) ||
+                std::filesystem::exists(p, ec)) {
+                return p;
+            }
+        }
+        return std::nullopt;
+    };
+
     if (argv0 != nullptr && *argv0 != '\0') {
         const std::filesystem::path canon = std::filesystem::weakly_canonical(argv0, ec);
         if (!ec) {
-            const std::filesystem::path p = canon.parent_path() / "hxlings.resources";
-            if (std::filesystem::exists(p, ec)) return p;
+            if (auto found = probe_base(canon.parent_path())) return *found;
         }
-        const std::filesystem::path raw = std::filesystem::path(argv0).parent_path() / "hxlings.resources";
-        if (std::filesystem::exists(raw, ec)) return raw;
+        if (auto found = probe_base(std::filesystem::path(argv0).parent_path())) return *found;
     }
-    return std::filesystem::current_path() / "hxlings.resources";
+    if (auto found = probe_base(std::filesystem::current_path(ec))) return *found;
+    return std::filesystem::current_path(ec) / "hxlings.resources";
 }
 
 std::shared_ptr<XlingsStore> MakeSeededStore() {
@@ -910,6 +925,93 @@ void AuditAllPagesAtViewport(
     ui.Pump();
 }
 
+void TestDuplicateDataNoDuplicateKeys(AuditContext& ctx, UiTest& ui, const std::shared_ptr<XlingsStore>& store) {
+    try {
+        PkgGroup dup_group{
+            .key = "xim:dup-pkg",
+            .ns = "xim",
+            .name = "dup-pkg",
+            .description = "duplicate group regression entry",
+            .active_version = "1.0.0",
+            .versions = {
+                InstalledPkg{.raw_spec = "xim:dup-pkg@1.0.0", .ns = "xim", .name = "dup-pkg", .version = "1.0.0", .is_active = true},
+            },
+        };
+        store->installed_groups = {dup_group, dup_group};
+        store->selected_installed_key = "xim:dup-pkg";
+        store->selected_installed_detail = PackageDetail{
+            .title = "xim:dup-pkg",
+            .package = "xim:dup-pkg",
+            .ns = "xim",
+            .name = "dup-pkg",
+            .description = "duplicate detail versions",
+            .status = "stable",
+            .selected_version = "1.0.0",
+            .available_versions = {"1.0.0", "1.0.0", "0.9.0"},
+        };
+
+        SearchPkg dup_search{
+            .package = "xim:dup-search",
+            .ns = "xim",
+            .name = "dup-search",
+            .version = "2.0.0",
+            .description = "duplicate search result",
+            .status = "stable",
+            .index = "xim",
+        };
+        store->search_results = {dup_search, dup_search};
+        store->selected_store_pkg = "xim:dup-search";
+        store->selected_store_detail = PackageDetail{
+            .title = "xim:dup-search",
+            .package = "xim:dup-search",
+            .ns = "xim",
+            .name = "dup-search",
+            .description = "duplicate store versions",
+            .status = "stable",
+            .selected_version = "2.0.0",
+            .available_versions = {"2.0.0", "2.0.0", "1.0.0"},
+        };
+
+        SubosEntry dup_subos{
+            .name = "default",
+            .dir = "/home/farna/.xlings/subos/default",
+            .abi = "native",
+            .kind = "view",
+            .view = "overlay",
+            .active = true,
+            .packages = 10,
+            .commands = 5,
+        };
+        store->subos_list = {dup_subos, dup_subos};
+        store->selected_subos = "default";
+        store->active_shims = {"gcc", "gcc", "clang"};
+
+        IndexSnapshot dup_snap{
+            .index_version = "bafdb27",
+            .generated_at = "2026-11-22T07:36:45Z",
+            .artifact_name = "xim-bafdb27.tar.gz",
+            .size_bytes = 1024ULL,
+            .current = true,
+            .installed = true,
+        };
+        IndexRepoVersions dup_repo{
+            .name = "xim",
+            .current = "bafdb27",
+            .installed = "bafdb27",
+            .snapshots = {dup_snap, dup_snap},
+        };
+        store->index_versions = {dup_repo, dup_repo};
+
+        for (const char* nav_key : {"nav-packages", "nav-store", "nav-subos", "nav-indexes"}) {
+            if (SafeTap(ctx, "DuplicateKeysRegression", ui.Find(UiSelector::Key(nav_key)), nav_key)) {
+                ui.Pump();
+            }
+        }
+    } catch (const std::exception& ex) {
+        ctx.Flag("DuplicateKeysRegression", std::string("Exception during duplicate data recomposition: ") + ex.what());
+    }
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -956,6 +1058,8 @@ int main(int argc, char** argv) {
     SafeTap(ctx, "1440x900 / Packages", ui.Find(UiSelector::Key("nav-packages")), "nav-packages");
     ui.Pump();
     AuditCurrentScreen(ctx, ui, 1440.0F, 900.0F, "Packages", "page-packages", true);
+
+    TestDuplicateDataNoDuplicateKeys(ctx, ui, store);
 
     if (ctx.anomalies.empty()) {
         std::cout << "UI layout test passed with 0 anomalies.\n";

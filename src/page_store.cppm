@@ -121,7 +121,8 @@ View StorePage() {
 
     std::vector<View> result_rows;
     result_rows.reserve(results.size());
-    for (const auto& pkg : results) {
+    for (std::size_t i = 0; i < results.size(); ++i) {
+        const auto& pkg = results[i];
         const bool is_sel = pkg.package == selected_pkg;
         const PkgGroup* installed_match = nullptr;
         for (const auto& g : installed_groups) {
@@ -181,7 +182,7 @@ View StorePage() {
                 chosen_version = std::string{};
                 store->LoadStoreDetail(tasks, pkg_id);
             })
-            .Key(pkg.package)
+            .Key("search-" + pkg.package + "-" + std::to_string(i))
         );
     }
 
@@ -220,7 +221,13 @@ View StorePage() {
         );
     } else {
         const PackageDetail& d = *detail_opt;
-        std::vector<std::string> ver_options = d.available_versions;
+        std::vector<std::string> ver_options;
+        ver_options.reserve(d.available_versions.size() + 1);
+        for (const auto& av : d.available_versions) {
+            if (!av.empty() && std::ranges::find(ver_options, av) == ver_options.end()) {
+                ver_options.push_back(av);
+            }
+        }
         if (ver_options.empty()) {
             ver_options.push_back(d.selected_version.empty() ? std::string("latest") : d.selected_version);
         }
@@ -238,6 +245,9 @@ View StorePage() {
         std::vector<std::string> subos_options{"(当前活跃 SubOS)"};
         std::vector<std::string> subos_values{""};
         for (const auto& s : suboses) {
+            if (s.name.empty() || std::ranges::find(subos_values, s.name) != subos_values.end()) {
+                continue;
+            }
             subos_options.push_back(s.name + (s.active ? " (当前)" : ""));
             subos_values.push_back(s.name);
         }
@@ -302,13 +312,13 @@ View StorePage() {
                 Column {
                     SectionHeader("安装选项", "目标坐标: " + install_target),
                     Row {
-                        Select(ver_options, ver_idx, [](const std::string& v) { return Text(v).Key(v); })
+                        Select(ver_options, ver_idx, [](const std::string& v) { return Text(v); })
                             .Label("选择版本")
                             .OnChanged([chosen_version, ver_options](std::size_t idx) mutable {
                                 if (idx < ver_options.size()) chosen_version = ver_options[idx];
                             })
                             .With(Grow(1.0F)),
-                        Select(subos_options, subos_idx, [](const std::string& s) { return Text(s).Key(s); })
+                        Select(subos_options, subos_idx, [](const std::string& s) { return Text(s); })
                             .Label("目标 SubOS")
                             .OnChanged([chosen_subos, subos_values](std::size_t idx) mutable {
                                 if (idx < subos_values.size()) chosen_subos = subos_values[idx];

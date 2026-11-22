@@ -77,7 +77,7 @@ View TaskConsole() {
             "复制",
             ButtonTone::Ghost,
             [lines, clipboard, toast] {
-                if (!clipboard || !clipboard->IsAvailable()) {
+                if (!clipboard || !clipboard->SupportsSynchronousText()) {
                     toast.Show("剪贴板不可用");
                     return;
                 }
@@ -86,8 +86,11 @@ View TaskConsole() {
                     joined += l;
                     joined.push_back('\n');
                 }
-                clipboard->WriteText(joined);
-                toast.Show("已复制任务日志");
+                if (clipboard->WriteText(joined)) {
+                    toast.Show("已复制任务日志");
+                } else {
+                    toast.Show("复制到剪贴板失败");
+                }
             },
             !lines.empty(),
             icons::CopyIcon(),

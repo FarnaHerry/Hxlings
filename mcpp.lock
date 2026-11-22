@@ -6,10 +6,33 @@
 version = 2
 
 [package."huxerui.huxerui"]
-namespace = "huxerui"
-version = "0.4.0"
-source  = "index+huxerui@0.4.0"
-hash    = "fnv1a:54674b52ead2b13f"
+version = "feat/build-system-contract-mcpp"
+source  = "git+https://github.com/Sunrisepeak/HuxerUI.git#branch=feat/build-system-contract-mcpp@e57d79f218fa30bc9728a381ff97f4e282e8f954"
+hash    = "fnv1a:f1239d1aefc06b27"
+
+[package."mcpp.plugins"]
+namespace = "mcpp"
+version = "0.26.1"
+source  = "index+mcpp@0.26.1"
+hash    = "fnv1a:a63cc83cc8de541e"
+
+[package."openkal"]
+namespace = "mcpplibs"
+version = "0.26.0"
+source  = "index+mcpplibs@0.26.0"
+hash    = "fnv1a:5ff41f0772150d19"
+
+[package."openkal-linux"]
+namespace = "mcpplibs"
+version = "0.27.0"
+source  = "index+mcpplibs@0.27.0"
+hash    = "fnv1a:4694783324a9057f"
+
+[package."os"]
+namespace = "mcpplibs"
+version = "0.4.5"
+source  = "index+mcpplibs@0.4.5"
+hash    = "fnv1a:1f6e11a858876b78"
 
 [package."nlohmann.json"]
 namespace = "nlohmann"

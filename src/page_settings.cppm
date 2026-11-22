@@ -116,9 +116,11 @@ View SettingsPage() {
                           "复制诊断输出",
                           ButtonTone::Ghost,
                           [doctor_out, clipboard, toast] {
-                              if (clipboard && clipboard->IsAvailable()) {
-                                  clipboard->WriteText(doctor_out);
+                              if (clipboard && clipboard->SupportsSynchronousText() &&
+                                  clipboard->WriteText(doctor_out)) {
                                   toast.Show("已复制诊断结果");
+                              } else {
+                                  toast.Show("复制到剪贴板失败");
                               }
                           },
                           true,
