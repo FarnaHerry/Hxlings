@@ -3,6 +3,7 @@ import xlings.types;
 import xlings.parser;
 import xlings.process;
 import hxlings.settings;
+import hxlings.platform_icon;
 
 using namespace hxlings;
 
@@ -406,6 +407,65 @@ void TestAppSettingsSerializationAndPersistence() {
     }
 }
 
+void TestBundledResourcesAndChildEnvSanitization() {
+    {
+        std::error_code ec;
+        const auto root = std::filesystem::temp_directory_path(ec) / "hxlings-bundle-res-test";
+        std::filesystem::remove_all(root, ec);
+
+        Check(ResolveBundledResourcesDir(root).empty(),
+              "ResolveBundledResourcesDir returns empty when resources.bin is absent");
+
+        const auto flat_root = root / "flat";
+        const auto flat_res = flat_root / "hxlings.resources";
+        std::filesystem::create_directories(flat_res / "huxerui", ec);
+        {
+            std::ofstream out(flat_res / "huxerui" / "resources.bin", std::ios::binary);
+            out << "bin";
+        }
+        Check(ResolveBundledResourcesDir(flat_root) == flat_res,
+              "ResolveBundledResourcesDir falls back to <bundle>/hxlings.resources");
+
+        const auto nested_root = root / "nested";
+        const auto nested_res = nested_root / "bin" / "hxlings.resources";
+        std::filesystem::create_directories(nested_res / "huxerui", ec);
+        {
+            std::ofstream out(nested_res / "huxerui" / "resources.bin", std::ios::binary);
+            out << "bin";
+        }
+        Check(ResolveBundledResourcesDir(nested_root) == nested_res,
+              "ResolveBundledResourcesDir prefers <bundle>/bin/hxlings.resources");
+
+        std::filesystem::remove_all(root, ec);
+    }
+    {
+        Check(PathMatchesPrefixOrRegistry("/opt/hxlings/lib/gconv", "/opt/hxlings"),
+              "PathMatchesPrefixOrRegistry matches exact prefix subpath");
+        Check(PathMatchesPrefixOrRegistry("/opt/hxlings/lib", "/opt/hxlings/"),
+              "PathMatchesPrefixOrRegistry normalizes trailing slash");
+        Check(!PathMatchesPrefixOrRegistry("/opt/hxlings-custom/lib", "/opt/hxlings"),
+              "PathMatchesPrefixOrRegistry ignores sibling prefix with shared stem");
+        Check(PathMatchesPrefixOrRegistry("/home/u/.mcpp/registry/data/xpkgs/xim-x-glibc/2.44/lib64", ""),
+              "PathMatchesPrefixOrRegistry matches .mcpp/registry");
+
+        const auto g1 = SanitizeColonPathList("/opt/hxlings/lib/gconv", "/opt/hxlings");
+        Check(!g1.has_value(), "SanitizeColonPathList returns nullopt when all entries stripped");
+
+        const auto g2 = SanitizeColonPathList("/usr/lib64/gconv:/opt/hxlings/lib/gconv", "/opt/hxlings");
+        Check(g2 == std::optional<std::string>("/usr/lib64/gconv"),
+              "SanitizeColonPathList keeps host gconv path while removing bundled path");
+
+        const auto g3 = SanitizeColonPathList("/opt/hxlings-custom/lib:/opt/hxlings/lib", "/opt/hxlings");
+        Check(g3 == std::optional<std::string>("/opt/hxlings-custom/lib"),
+              "SanitizeColonPathList preserves /opt/hxlings-custom/lib");
+
+        const auto g4 = SanitizeColonPathList(
+            "/home/u/.mcpp/registry/data/xpkgs/xim-x-glibc/2.44/lib64:/usr/local/lib", "");
+        Check(g4 == std::optional<std::string>("/usr/local/lib"),
+              "SanitizeColonPathList strips .mcpp/registry paths");
+    }
+}
+
 } // namespace
 
 int main() {
@@ -422,6 +482,7 @@ int main() {
     TestWhitespaceAndSearchNormalization();
     TestProcessStreamingAndCancel();
     TestAppSettingsSerializationAndPersistence();
+    TestBundledResourcesAndChildEnvSanitization();
 
     if (failures == 0) {
         std::println("All parser and xlings integration tests passed.");

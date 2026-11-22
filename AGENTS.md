@@ -37,7 +37,7 @@
   - `mcpp build && mcpp test`
   - 若增删 `.cppm` 导入后遇到 P1689 模块图分歧报错，先执行 `mcpp clean` 再构建。
 - 便携包与资源烟测：
-  - `mcpp pack hxlings --release --pkg-format tar`
+  - `mcpp pack hxlings --release --mode self-contained --pkg-format tar`
 
 ## 5. 共享记忆规范（`project-memory/`）
 

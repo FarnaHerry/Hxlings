@@ -37,17 +37,18 @@ file resources/images/hxlings.png resources/images/tray_icon.png platform/window
 
 ## 3. 多平台打包、CI 检查与安全释放原则
 
-1. **打包产物矩阵**（`mcpp pack hxlings --release --pkg-format <fmt>`）：
-   - Linux：`tar`、`deb`、`rpm`、`appimage`
+1. **打包产物矩阵**（Linux 使用 `mcpp pack hxlings --release --mode self-contained --pkg-format <fmt>`，macOS/Windows 使用 `mcpp pack hxlings --release --pkg-format <fmt>`）：
+   - Linux：`tar`、`deb`、`rpm`、`appimage`（必须传 `--mode self-contained`，随附 `lib/ld-linux-x86-64.so.2`、`lib/libc.so.6`、`lib/libm.so.6` 与 `lib/gconv/`，避免宿主机缺少 `GLIBC_2.43`/`GLIBC_2.44` 启动失败；`src/platform_icon.cppm` 启动时读取 `MCPP_BUNDLE_DIR` 自动推导并设置 `HUXERUI_RESOURCES_DIR`）
    - Windows：`zip`、`msi`、`setup`（WiX Burn）
    - macOS：`tar`、`dmg`
 2. **CI 归档检查要点（`.github/workflows/ci.yml`）**：
    - `set -o pipefail` 下禁止 `tar -tzf ... | grep -q`（会触发 SIGPIPE 141），应先存入变量再过滤检查。
    - Linux `tar`/`deb`、macOS `tar`、Windows `msi` 文件表必须同时包含 `huxerui/resources.bin`、`app/images/hxlings.png`、`app/images/tray_icon.png`。
+   - Linux 自包含门禁：校验 `tar`/`deb`/`AppImage` 包含 `lib/ld-linux-x86-64.so.2`、`lib/libc.so.6`、`lib/libm.so.6`、`lib/gconv/` 与 `MCPP_BUNDLE_DIR` 启动封装器，且用随附 `ld-linux-x86-64.so.2 --library-path "$top/lib" --list "$top/bin/hxlings"` 确认 `libc.so.6` 与 `libm.so.6` 全部解析至包内目录而非宿主 `/lib*`。
 3. **本地打包烟测与发布**：
    ```bash
-   mcpp pack hxlings --release --pkg-format tar --output /tmp/hxlings-check.tar.gz
-   tar -tzf /tmp/hxlings-check.tar.gz | grep -E 'resources\.bin|app/images/(hxlings|tray_icon)\.png'
+   mcpp pack hxlings --release --mode self-contained --pkg-format tar --output /tmp/hxlings-check.tar.gz
+   tar -tzf /tmp/hxlings-check.tar.gz | grep -E 'resources\.bin|app/images/(hxlings|tray_icon)\.png|ld-linux-x86-64\.so\.2'
    rm -f /tmp/hxlings-check.tar.gz
    ```
    - `.github/workflows/release.yml` 由 `v*` Tag 触发并校验全部 9 个平台产物 + 生成 `SHA256SUMS.txt`；切勿强制改写既有已发布 Tag。

@@ -46,10 +46,10 @@ mcpp test
 mcpp run
 
 # 打包便携归档或各平台原生安装包
-mcpp pack hxlings --release --pkg-format tar        # Linux/macOS 便携归档（Windows 使用 zip）
-mcpp pack hxlings --release --pkg-format deb        # Linux DEB 安装包
-mcpp pack hxlings --release --pkg-format rpm        # Linux RPM 安装包
-mcpp pack hxlings --release --pkg-format appimage   # Linux AppImage
+mcpp pack hxlings --release --mode self-contained --pkg-format tar       # Linux 便携归档（自包含 glibc；macOS 可省略 --mode，Windows 使用 zip）
+mcpp pack hxlings --release --mode self-contained --pkg-format deb       # Linux DEB 安装包
+mcpp pack hxlings --release --mode self-contained --pkg-format rpm       # Linux RPM 安装包
+mcpp pack hxlings --release --mode self-contained --pkg-format appimage  # Linux AppImage
 mcpp pack hxlings --release --pkg-format msi        # Windows MSI 安装包
 mcpp pack hxlings --release --pkg-format setup      # Windows Burn 安装向导（内含 MSI）
 mcpp pack hxlings --release --pkg-format dmg        # macOS DMG 磁盘镜像
@@ -65,6 +65,7 @@ mcpp pack hxlings --release --pkg-format dmg        # macOS DMG 磁盘镜像
 ## 说明
 
 - 当前基于 `mcpp 2026.11.21.1` 构建，并通过 Git 依赖接入官方 `HuxerUI/HuxerUI`（`main` 分支，0.5.0，已合入完整的新版 `mcpp` 构建契约与内建资源/插件打包支持）。
+- Linux 安装包（`.tar.gz` / `.deb` / `.rpm` / `.AppImage`）统一采用 `mcpp pack --mode self-contained` 自包含打包：由于 HuxerUI 依赖的 `xim:*`（如 `libsqlite3.so.0` / `libgtk-4.so.1`）针对 `xim:glibc@2.44` 构建，打包产物内随附 `ld-linux-x86-64.so.2`、`libc.so.6`、`libm.so.6` 与 `gconv/`；应用启动时由 `MCPP_BUNDLE_DIR` 自动推导 `HUXERUI_RESOURCES_DIR`，并在派生 `xlings` 子进程前清理封装器注入的 `GCONV_PATH`、`LD_LIBRARY_PATH` 与 `MCPP_BUNDLE_DIR`。
 - 当通过 `mcpp run` 启动时，进程环境中的 `XLINGS_HOME` 会指向 `mcpp` 自身的隔离目录（`~/.mcpp/registry`）。Hxlings 在解析并派生 `xlings` 子进程时会自动跳过 `~/.mcpp/registry`，确保始终管理用户的真实 `xlings` 环境（可通过 `HXLINGS_BIN` 环境变量显式覆盖 `xlings` 路径）。
 - 在 Linux Wayland + XWayland 会话中，为避免 `xim:gtk4@4.16.13` 在部分 Wayland 合成器下触发 `zwp_linux_dmabuf_feedback_v1` 初始化崩溃，当 `GDK_BACKEND` 未设置且同时存在 `WAYLAND_DISPLAY` 与 `DISPLAY` 时会默认回退到 `GDK_BACKEND=x11`；如需强制使用 Wayland，可显式运行 `GDK_BACKEND=wayland mcpp run`。
 

@@ -562,7 +562,7 @@ View SettingsPage() {
                         Text("Hxlings", TextRole::Title)
                             .Style(TextStyle{.font = Font::System(15.5F).WithWeight(FontWeight::Bold),
                                              .foreground = theme.colors.on_surface}),
-                        StatusBadge("v0.1.1", theme.colors.primary, theme.colors.primary_container),
+                        StatusBadge("v0.1.2", theme.colors.primary, theme.colors.primary_container),
                     }.With(Spacing(8.0F), CrossAlign(CrossAxisAlignment::Center)),
                     Text("基于 C++23 Modules、mcpp 与 HuxerUI 构建的跨平台 xlings 桌面管理器", TextRole::Label)
                         .Style(TextStyle{.font = Font::System(12.0F),
@@ -570,7 +570,7 @@ View SettingsPage() {
                 }.With(Spacing(3.0F), Grow(1.0F)),
             }.With(Spacing(12.0F), CrossAlign(CrossAxisAlignment::Center)),
             Divider(),
-            KeyValueRow("应用版本", "Hxlings v0.1.1 · HuxerUI", false, true),
+            KeyValueRow("应用版本", "Hxlings v0.1.2 · HuxerUI", false, true),
             KeyValueRow("xlings CLI", cli_version_text, false, true),
             KeyValueRow("开源协议", "MIT License", false, false),
             KeyValueRow("Hxlings 仓库", "https://github.com/FarnaHerry/Hxlings", true, true),

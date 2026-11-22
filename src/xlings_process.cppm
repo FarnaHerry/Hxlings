@@ -35,11 +35,80 @@ bool ContainsPathEntry(const std::vector<std::filesystem::path>& dirs, const std
     return false;
 }
 
+template <class Fn>
+void ForEachColonSegment(std::string_view list, Fn&& fn) {
+    std::size_t start = 0;
+    while (start <= list.size()) {
+        const std::size_t sep = list.find(':', start);
+        const std::size_t len = (sep == std::string_view::npos) ? (list.size() - start) : (sep - start);
+        if (!fn(list.substr(start, len))) break;
+        if (sep == std::string_view::npos) break;
+        start = sep + 1;
+    }
+}
+
+} // namespace hxlings::detail
+
+export namespace hxlings {
+
+inline bool PathMatchesPrefixOrRegistry(std::string_view value, std::string_view bundle_dir) {
+    if (value.empty()) return false;
+    if (detail::ContainsMcppRegistry(value)) return true;
+    while (!bundle_dir.empty() && (bundle_dir.back() == '/' || bundle_dir.back() == '\\')) {
+        bundle_dir.remove_suffix(1);
+    }
+    if (bundle_dir.empty()) return false;
+    if (!value.starts_with(bundle_dir)) return false;
+    return value.size() == bundle_dir.size() ||
+           value[bundle_dir.size()] == '/' ||
+           value[bundle_dir.size()] == '\\';
+}
+
+inline std::optional<std::string> SanitizeColonPathList(std::string_view list, std::string_view bundle_dir) {
+    std::string out;
+    detail::ForEachColonSegment(list, [&](std::string_view token) {
+        if (!token.empty() && !PathMatchesPrefixOrRegistry(token, bundle_dir)) {
+            if (!out.empty()) out.push_back(':');
+            out.append(token);
+        }
+        return true;
+    });
+    if (out.empty()) return std::nullopt;
+    return out;
+}
+
+} // namespace hxlings
+
+namespace hxlings::detail {
+
 std::vector<std::pair<std::string, std::optional<std::string>>> BuildSanitizedEnvOverrides() {
     std::vector<std::pair<std::string, std::optional<std::string>>> overrides;
     for (const char* var_name : {"XLINGS_HOME", "XLINGS_DATA", "XLINGS_SUBOS"}) {
         if (const auto val = os::env::get(var_name); val && ContainsMcppRegistry(*val)) {
             overrides.emplace_back(var_name, std::nullopt);
+        }
+    }
+
+    const std::string bundle_dir = os::env::get("MCPP_BUNDLE_DIR").value_or(std::string{});
+    if (!bundle_dir.empty()) {
+        overrides.emplace_back("MCPP_BUNDLE_DIR", std::nullopt);
+    }
+
+    if constexpr (os::is_posix) {
+        for (const char* path_var : {"GCONV_PATH", "LD_LIBRARY_PATH"}) {
+            if (const auto val = os::env::get(path_var); val && !val->empty()) {
+                bool contaminated = false;
+                ForEachColonSegment(*val, [&](std::string_view token) {
+                    if (hxlings::PathMatchesPrefixOrRegistry(token, bundle_dir)) {
+                        contaminated = true;
+                        return false;
+                    }
+                    return true;
+                });
+                if (contaminated) {
+                    overrides.emplace_back(path_var, hxlings::SanitizeColonPathList(*val, bundle_dir));
+                }
+            }
         }
     }
 

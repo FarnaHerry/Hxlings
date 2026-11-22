@@ -3,6 +3,26 @@ export module hxlings.platform_icon;
 import std;
 import mcpplibs.os;
 
+export namespace hxlings {
+
+inline std::filesystem::path ResolveBundledResourcesDir(const std::filesystem::path& bundle_dir) {
+    if (bundle_dir.empty()) {
+        return {};
+    }
+    std::error_code ec;
+    for (const std::filesystem::path& candidate : {
+             bundle_dir / "bin" / "hxlings.resources",
+             bundle_dir / "hxlings.resources",
+         }) {
+        if (std::filesystem::is_regular_file(candidate / "huxerui" / "resources.bin", ec)) {
+            return candidate;
+        }
+    }
+    return {};
+}
+
+} // namespace hxlings
+
 namespace hxlings::detail {
 
 namespace os = mcpplibs::os;
@@ -12,6 +32,13 @@ inline std::filesystem::path ResolveAppIconPngPath() {
     if (const auto res_dir = os::env::get("HUXERUI_RESOURCES_DIR");
         res_dir.has_value() && !res_dir->empty()) {
         candidates.push_back(std::filesystem::path(*res_dir) / "huxerui" / "app" / "images" / "hxlings.png");
+    }
+    if (const auto bundle_dir = os::env::get("MCPP_BUNDLE_DIR");
+        bundle_dir.has_value() && !bundle_dir->empty()) {
+        if (const auto bundled_res = hxlings::ResolveBundledResourcesDir(os::fs::from_utf8(*bundle_dir));
+            !bundled_res.empty()) {
+            candidates.push_back(bundled_res / "huxerui" / "app" / "images" / "hxlings.png");
+        }
     }
     if (const auto exe = os::env::image(); exe.has_value() && !exe->empty()) {
         const auto exe_dir = exe->parent_path();
@@ -28,6 +55,33 @@ inline std::filesystem::path ResolveAppIconPngPath() {
         }
     }
     return {};
+}
+
+inline void ConfigureLinuxBundledResourcesEnv() {
+    if constexpr (os::is_linux) {
+        const auto non_empty = [](const std::optional<std::string>& value) {
+            return value.has_value() && !value->empty();
+        };
+        if (non_empty(os::env::get("HUXERUI_RESOURCES_DIR"))) {
+            return;
+        }
+        const auto bundle_dir = os::env::get("MCPP_BUNDLE_DIR");
+        if (!non_empty(bundle_dir)) {
+            return;
+        }
+        const auto res_dir = hxlings::ResolveBundledResourcesDir(os::fs::from_utf8(*bundle_dir));
+        if (res_dir.empty()) {
+            return;
+        }
+        using SetenvFn = int (*)(const char*, const char*, int);
+        if (const auto set_env = reinterpret_cast<SetenvFn>(os::library::process_symbol("setenv"));
+            set_env != nullptr) {
+            const std::string res_utf8 = os::fs::utf8(res_dir);
+            if (!res_utf8.empty()) {
+                set_env("HUXERUI_RESOURCES_DIR", res_utf8.c_str(), 1);
+            }
+        }
+    }
 }
 
 inline void ConfigureLinuxGraphicsEnv() {
@@ -222,6 +276,7 @@ export namespace hxlings {
 
 inline void PreparePlatformStartup() {
     namespace os = mcpplibs::os;
+    detail::ConfigureLinuxBundledResourcesEnv();
     detail::ConfigureLinuxGraphicsEnv();
     if constexpr (os::is_linux) {
         using SetPrgnameFn = void (*)(const char*);

@@ -43,3 +43,7 @@
 11. **`Lifecycle`/`OnShortcut` 依赖捕获大于 16B 的结构体触发 Clang 22 `std::__exception_guard` 二义性**
     - **现象**：将 `huxerui::MotionScheme` 等较大值类型直接作为 `Lifecycle`/`OnShortcut` 变参依赖传入 `std::any` 时，跨 `std` 与 `huxerui` 模块实例化 `_LargeHandler::__create` 会报错 `ambiguous deduction for template arguments of 'std::__exception_guard'`。
     - **解决**：依赖参数仅传入标量/基础类型字段（如 `theme.motion.normal`, `theme.motion.reduced_motion`）走 `std::any` 小对象优化路径。
+
+12. **Linux `mcpp pack --mode vendored` 依赖宿主 `/lib64/libm.so.6` 导致 `GLIBC_2.44` 启动失败**
+    - **现象**：Linux 包基于 `xim:*`（如 `libsqlite3.so.0` 要 `GLIBC_2.44`、`libgtk-4.so.1`/`libglib-2.0.so.0` 要 `GLIBC_2.43`）构建；默认 `vendored` 不带 `libc.so.6`/`libm.so.6`/`ld-linux-x86-64.so.2`，安装到宿主 Linux 后因宿主 glibc 更旧而无法启动。
+    - **解决**：Linux 打包全部使用 `--mode self-contained`；因随附动态链接器启动使 `/proc/self/exe` 指向 `ld-linux-x86-64.so.2`，需在 `PreparePlatformStartup()` 与 `ResolveAppIconPngPath()` 读取 `MCPP_BUNDLE_DIR` 设置 `HUXERUI_RESOURCES_DIR`，并在 `src/xlings_process.cppm` 清理自包含封装器导出的 `GCONV_PATH`、`LD_LIBRARY_PATH` 与 `MCPP_BUNDLE_DIR`。

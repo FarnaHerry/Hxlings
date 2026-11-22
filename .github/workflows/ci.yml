@@ -116,15 +116,33 @@ jobs:
           mkdir -p dist
 
           tar_out="dist/hxlings-${pkg_version}-linux-x86_64.tar.gz"
-          mcpp pack hxlings --release --pkg-format tar --output "$tar_out"
+          mcpp pack hxlings --release --mode self-contained --pkg-format tar --output "$tar_out"
           test -s "$tar_out"
           tar_list=$(tar -tzf "$tar_out")
           printf '%s\n' "$tar_list" | grep -q 'hxlings.resources/huxerui/resources.bin'
           printf '%s\n' "$tar_list" | grep -q 'hxlings\.resources/huxerui/app/images/hxlings\.png'
           printf '%s\n' "$tar_list" | grep -q 'hxlings\.resources/huxerui/app/images/tray_icon\.png'
           printf '%s\n' "$tar_list" | grep -q 'dropdown_indicator\.huxv'
+          printf '%s\n' "$tar_list" | grep -q 'lib/ld-linux-x86-64\.so\.2'
+          printf '%s\n' "$tar_list" | grep -q 'lib/libc\.so\.6'
+          printf '%s\n' "$tar_list" | grep -q 'lib/libm\.so\.6'
+          printf '%s\n' "$tar_list" | grep -q 'lib/gconv/'
 
-          deb_src=$(mcpp pack hxlings --release --pkg-format deb --message-format json | extract_pack_path)
+          tar_check_dir="$RUNNER_TEMP/hxlings-tar-check"
+          rm -rf "$tar_check_dir" && mkdir -p "$tar_check_dir"
+          tar -xzf "$tar_out" -C "$tar_check_dir"
+          tar_top=$(find "$tar_check_dir" -mindepth 1 -maxdepth 1 -type d | head -n 1)
+          test -d "$tar_top"
+          grep -q 'MCPP_BUNDLE_DIR' "$tar_top/hxlings"
+          grep -q 'ld-linux-x86-64.so.2' "$tar_top/hxlings"
+          ldd_out=$("$tar_top/lib/ld-linux-x86-64.so.2" --library-path "$tar_top/lib" --list "$tar_top/bin/hxlings")
+          ! printf '%s\n' "$ldd_out" | grep -q 'not found'
+          printf '%s\n' "$ldd_out" | grep -E 'libc\.so\.6 => ' | grep -Fq "$tar_top/"
+          printf '%s\n' "$ldd_out" | grep -E 'libm\.so\.6 => ' | grep -Fq "$tar_top/"
+          ! printf '%s\n' "$ldd_out" | grep -E '=> /(lib|lib64|usr/lib|usr/lib64)/'
+          rm -rf "$tar_check_dir"
+
+          deb_src=$(mcpp pack hxlings --release --mode self-contained --pkg-format deb --message-format json | extract_pack_path)
           test -s "$deb_src"
           deb_out="dist/hxlings-${pkg_version}-linux-x86_64.deb"
           cp "$deb_src" "$deb_out"
@@ -134,21 +152,33 @@ jobs:
           echo "$deb_list" | grep -q 'hxlings\.resources/huxerui/resources\.bin'
           echo "$deb_list" | grep -q 'hxlings\.resources/huxerui/app/images/hxlings\.png'
           echo "$deb_list" | grep -q 'hxlings\.resources/huxerui/app/images/tray_icon\.png'
+          echo "$deb_list" | grep -q '/opt/hxlings/lib/ld-linux-x86-64\.so\.2'
+          echo "$deb_list" | grep -q '/opt/hxlings/lib/libc\.so\.6'
+          echo "$deb_list" | grep -q '/opt/hxlings/lib/libm\.so\.6'
           echo "$deb_list" | grep -q '/usr/share/applications/hxlings\.desktop'
           echo "$deb_list" | grep -q '/usr/share/icons/hicolor/scalable/apps/hxlings\.svg'
 
-          rpm_src=$(mcpp pack hxlings --release --pkg-format rpm --message-format json | extract_pack_path)
+          rpm_src=$(mcpp pack hxlings --release --mode self-contained --pkg-format rpm --message-format json | extract_pack_path)
           test -s "$rpm_src"
           rpm_out="dist/hxlings-${pkg_version}-linux-x86_64.rpm"
           cp "$rpm_src" "$rpm_out"
           file "$rpm_out" | grep -q 'RPM'
 
-          app_src=$(mcpp pack hxlings --release --pkg-format appimage --message-format json | extract_pack_path)
+          app_src=$(mcpp pack hxlings --release --mode self-contained --pkg-format appimage --message-format json | extract_pack_path)
           test -s "$app_src"
           app_out="dist/hxlings-${pkg_version}-linux-x86_64.AppImage"
           cp "$app_src" "$app_out"
           chmod +x "$app_out"
           file "$app_out" | grep -qiE 'ELF|AppImage'
+          app_check_dir="$RUNNER_TEMP/hxlings-appimage-check"
+          rm -rf "$app_check_dir" && mkdir -p "$app_check_dir"
+          (cd "$app_check_dir" && "$OLDPWD/$app_out" --appimage-extract >/dev/null)
+          test -f "$app_check_dir/squashfs-root/lib/ld-linux-x86-64.so.2"
+          test -f "$app_check_dir/squashfs-root/lib/libc.so.6"
+          test -f "$app_check_dir/squashfs-root/lib/libm.so.6"
+          test -s "$app_check_dir/squashfs-root/bin/hxlings.resources/huxerui/resources.bin"
+          grep -q 'MCPP_BUNDLE_DIR' "$app_check_dir/squashfs-root/hxlings"
+          rm -rf "$app_check_dir"
 
           ls -lh dist
 
