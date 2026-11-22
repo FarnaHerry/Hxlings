@@ -3,9 +3,12 @@ export module app;
 import std;
 import mcpplibs.os;
 import huxerui;
+import app.resources;
 import hxlings.theme;
 import hxlings.icons;
 import hxlings.shortcuts;
+import hxlings.settings;
+import hxlings.platform_icon;
 import hxlings.store;
 import hxlings.components;
 import hxlings.console;
@@ -23,6 +26,8 @@ namespace {
 
 void InstallApplication(ApplicationContext& context) {
     auto store = std::make_shared<XlingsStore>();
+    store->InitAppSettings(LoadAppSettings());
+    ApplyPlatformApplicationIcon();
     context.Provide(std::move(store));
 }
 
@@ -180,13 +185,40 @@ View MainShell() {
     const TaskScope tasks = UseApplicationTaskScope();
     const ThemeSpec& theme = UseTheme();
     const StatusPalette sp = ResolveStatusPalette(theme);
+    const ApplicationHandle application = UseApplication();
+    const SystemTrayHandle tray = application.SystemTray();
     const WindowHandle window = UseWindow();
     const DialogHandle dialog = UseDialog();
 
-    Lifecycle([store, tasks] {
-        if (!store->skip_initial_refresh) {
-            store->RefreshAll(tasks);
+    store->main_window = window;
+
+    const auto restore_window = [store] {
+        if (store->main_window.has_value() && store->main_window->IsOpen()) {
+            store->main_window->Show();
+            store->main_window->Restore();
+            store->main_window->Activate();
         }
+    };
+
+    Lifecycle([store, tasks, tray, restore_window] {
+        if (!store->skip_initial_refresh) {
+            ApplyPlatformWindowIcon();
+            if (!store->tray_activate_registered) {
+                store->tray_activate_registered = true;
+                tray.OnActivate(restore_window);
+            }
+            store->RefreshCore(tasks);
+        }
+    });
+
+    window.OnCloseRequest([store, window, tray] {
+        if (store->force_quit_requested) return false;
+        const auto cfg = store->app_settings.Get();
+        if (cfg.tray_enabled && cfg.close_to_tray && tray.IsAvailable()) {
+            window.Hide();
+            return true;
+        }
+        return false;
     });
 
     constexpr KeyModifiers primary = PrimaryModifier();
@@ -224,7 +256,7 @@ View MainShell() {
         return true;
     });
     window.OnShortcut(Key::D, primary_shift, [store] {
-        store->dark_mode = !store->dark_mode.Get();
+        store->SetDarkMode(!store->dark_mode.Get());
         return true;
     });
     window.OnShortcut(Key::U, primary_shift, [store] {
@@ -245,7 +277,11 @@ View MainShell() {
     });
     if constexpr (kIsMacOs) {
         window.OnShortcut(Key::W, primary, [window] { window.Close(); return true; });
-        window.OnShortcut(Key::Q, primary, [window] { window.Close(); return true; });
+        window.OnShortcut(Key::Q, primary, [store, application] {
+            store->force_quit_requested = true;
+            application.Quit();
+            return true;
+        });
         window.OnShortcut(Key::M, primary, [window] { window.Minimize(); return true; });
         window.OnShortcut(Key::F, KeyModifiers{.control = true, .meta = true}, [window] {
             window.SetFullscreen(!window.IsFullscreen());
@@ -257,6 +293,7 @@ View MainShell() {
     const bool refreshing = store->refreshing.Get();
     const bool task_running = store->task_running.Get();
     const bool dark = store->dark_mode.Get();
+    const bool tray_enabled = store->app_settings.Get().tray_enabled;
     const auto& env = store->env.Get();
     const auto& ver = store->version_info.Get();
     const auto& groups = store->installed_groups.Get();
@@ -265,17 +302,39 @@ View MainShell() {
 
     const std::string active_subos = env.active_subos.empty() ? std::string("default") : env.active_subos;
 
+    Lifecycle([store, application, tray, tasks, restore_window, tray_enabled, active_subos, task_running] {
+        if (store->skip_initial_refresh) return;
+        if (!tray_enabled) {
+            tray.Hide();
+            return;
+        }
+        const std::string tooltip = "Hxlings — SubOS: " + active_subos +
+                                    (task_running ? " · 任务执行中" : "");
+        std::vector<MenuEntry> menu{
+            MenuItem("显示主窗口", restore_window),
+            MenuSection{},
+            MenuItem("概览总览", [store, restore_window] { store->active_nav = 0; restore_window(); }),
+            MenuItem("已安装管理", [store, restore_window] { store->active_nav = 1; restore_window(); }),
+            MenuItem("探索与安装", [store, restore_window] { store->active_nav = 2; restore_window(); }),
+            MenuItem("SubOS 环境 (" + active_subos + ")", [store, restore_window] { store->active_nav = 3; restore_window(); }),
+            MenuItem("索引与配方", [store, restore_window] { store->active_nav = 4; restore_window(); }),
+            MenuItem("设置与诊断", [store, restore_window] { store->active_nav = 5; restore_window(); }),
+            MenuSection{},
+            MenuItem("刷新状态", [store, tasks] { store->RefreshCore(tasks, true); }),
+            MenuItem("批量检查更新", [store, restore_window] { store->RequestOpenBatchUpdate(); restore_window(); }),
+            MenuSection{},
+            MenuItem("退出 Hxlings", [store, application] {
+                store->force_quit_requested = true;
+                application.Quit();
+            }),
+        };
+        tray.Show(app::images::tray_icon, {.tooltip = tooltip, .menu = std::move(menu)});
+    }, tray_enabled, active_subos, task_running);
+
     View title_bar = WindowTitleBar {
-        Row {
-            Image(icons::LogoIcon())
-                .Fit(ImageFit::Contain)
-                .Tint(theme.colors.primary)
-                .With(Frame{.width = 18.0F, .height = 18.0F}),
-        }.With(
-            Padding(4.0F),
-            Background(theme.colors.primary_container),
-            CornerRadius(6.0F)
-        ),
+        Image(app::images::hxlings)
+            .Fit(ImageFit::Contain)
+            .With(Frame{.width = 24.0F, .height = 24.0F}, CornerRadius(6.0F)),
         Text("Hxlings", TextRole::Title)
             .Style(TextStyle{
                 .font = Font::System(15.0F).WithWeight(FontWeight::Bold),
@@ -316,7 +375,7 @@ View MainShell() {
         TitleIconAction(
             dark ? icons::SunIcon() : icons::MoonIcon(),
             (dark ? "切换到浅色主题 (" : "切换到深色主题 (") + FormatShortcut("D", true) + ")",
-            [store, dark] { store->dark_mode = !dark; },
+            [store, dark] { store->SetDarkMode(!dark); },
             true,
             "切换主题"
         ),

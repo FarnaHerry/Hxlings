@@ -7,25 +7,35 @@ import xlings.parser;
 import xlings.process;
 import xlings.client;
 import hxlings.theme;
+import hxlings.settings;
 
 using namespace huxerui;
 
 export namespace hxlings {
 
-struct RefreshSnapshot {
+struct CoreEnvSnapshot {
     XlingsVersionInfo version_info;
     XlingsEnv env;
-    SystemStatus system_status;
+};
+
+struct CorePackagesSnapshot {
     std::vector<InstalledPkg> installed_raw;
     std::vector<PkgGroup> installed_groups;
+};
+
+struct CoreSubosSnapshot {
     std::vector<SubosEntry> subos_list;
     std::vector<std::string> active_shims;
+};
+
+struct CoreReposLogsSnapshot {
     std::vector<RepoEntry> repos;
-    std::vector<IndexRepoVersions> index_versions;
-    ConfigSnapshot config;
-    std::vector<LocalXpkg> local_xpkgs;
-    std::vector<ProfileGeneration> profiles;
     std::vector<SelfLogEntry> recent_logs;
+};
+
+struct IndexesLocalSnapshot {
+    std::vector<RepoEntry> repos;
+    std::vector<LocalXpkg> local_xpkgs;
 };
 
 struct InstalledDetailSnapshot {
@@ -46,11 +56,16 @@ public:
 
     bool skip_initial_refresh = false;
 
-    // UI Preferences
+    // Client Preferences (decoupled from xlings CLI global config)
     State<bool> dark_mode{false};
     State<Color> brand_color{DefaultBrandColor()};
+    State<AppSettings> app_settings{AppSettings{}};
     State<std::size_t> active_nav{0};
+    State<std::size_t> settings_tab{0};
     State<bool> console_expanded{false};
+    bool force_quit_requested = false;
+    bool tray_activate_registered = false;
+    std::optional<WindowHandle> main_window;
 
     // Environment & Dashboard
     State<XlingsVersionInfo> version_info{XlingsVersionInfo{}};
@@ -106,10 +121,18 @@ public:
     State<std::vector<RepoEntry>> repos{std::vector<RepoEntry>{}};
     State<std::vector<IndexRepoVersions>> index_versions{std::vector<IndexRepoVersions>{}};
     State<std::vector<LocalXpkg>> local_xpkgs{std::vector<LocalXpkg>{}};
+    State<bool> loading_indexes{false};
+    State<bool> indexes_loaded{false};
+    State<bool> loading_index_versions{false};
+    State<bool> index_versions_loaded{false};
 
     // Config, Doctor & Profiles
     State<ConfigSnapshot> config{ConfigSnapshot{}};
     State<std::vector<ProfileGeneration>> profiles{std::vector<ProfileGeneration>{}};
+    State<bool> loading_xlings_config{false};
+    State<bool> xlings_config_loaded{false};
+    State<bool> loading_profiles{false};
+    State<bool> profiles_loaded{false};
     State<std::string> doctor_output{std::string{}};
     State<std::string> clean_output{std::string{}};
 
@@ -147,74 +170,312 @@ public:
         }
     }
 
-    void RefreshAll(TaskScope tasks) {
-        if (refreshing.Get()) return;
+    void InitAppSettings(const AppSettings& loaded) {
+        ApplyAppSettings(loaded, false);
+    }
+
+    void ApplyAppSettings(AppSettings next, bool persist = true) {
+        const auto presets = BrandPresets();
+        const int max_idx = static_cast<int>(presets.size()) - 1;
+        next.brand_preset_index = std::clamp(next.brand_preset_index, 0, max_idx);
+        app_settings = next;
+        dark_mode = next.dark_mode;
+        brand_color = presets[static_cast<std::size_t>(next.brand_preset_index)];
+        if (persist && !skip_initial_refresh) {
+            (void)SaveAppSettings(next);
+        }
+    }
+
+    void SetDarkMode(bool enabled) {
+        AppSettings next = app_settings.Get();
+        next.dark_mode = enabled;
+        ApplyAppSettings(std::move(next), true);
+    }
+
+    void SetBrandPresetIndex(int index) {
+        AppSettings next = app_settings.Get();
+        next.brand_preset_index = index;
+        ApplyAppSettings(std::move(next), true);
+    }
+
+    void SetTrayEnabled(bool enabled) {
+        AppSettings next = app_settings.Get();
+        next.tray_enabled = enabled;
+        ApplyAppSettings(std::move(next), true);
+    }
+
+    void SetCloseToTray(bool enabled) {
+        AppSettings next = app_settings.Get();
+        next.close_to_tray = enabled;
+        ApplyAppSettings(std::move(next), true);
+    }
+
+    void RefreshCore(TaskScope tasks, bool force = false) {
+        if (!force && refreshing.Get()) return;
         refreshing = true;
 
+        const std::uint64_t seq = ++core_refresh_seq_;
+        auto pending = std::make_shared<std::atomic<int>>(5);
         auto self = shared_from_this();
         const XlingsClient client = client_;
-        tasks.Launch([self, tasks, client]() -> Task<void> {
-            RefreshSnapshot snap = co_await RunWorker([client]() -> RefreshSnapshot {
-                RefreshSnapshot s;
-                s.version_info = client.QueryVersion();
-                s.env = client.QueryEnv();
-                s.system_status = client.QuerySystemStatus();
+
+        auto finish_one = [self, pending, seq]() {
+            if (pending->fetch_sub(1, std::memory_order_acq_rel) == 1 &&
+                self->core_refresh_seq_.load(std::memory_order_acquire) == seq) {
+                self->refreshing = false;
+            }
+        };
+
+        // 1. Fast Env + Version (~10ms) -> marks initial_loaded so shell renders immediately
+        tasks.Launch([self, client, seq, finish_one]() -> Task<void> {
+            CoreEnvSnapshot snap = co_await RunWorker([client]() -> CoreEnvSnapshot {
+                return CoreEnvSnapshot{
+                    .version_info = client.QueryVersion(),
+                    .env = client.QueryEnv(),
+                };
+            });
+            if (self->core_refresh_seq_.load(std::memory_order_acquire) == seq) {
+                self->version_info = std::move(snap.version_info);
+                self->env = std::move(snap.env);
+                self->initial_loaded = true;
+            }
+            finish_one();
+        });
+
+        // 2. System status (~163ms)
+        tasks.Launch([self, client, seq, finish_one]() -> Task<void> {
+            SystemStatus snap = co_await RunWorker([client]() -> SystemStatus {
+                return client.QuerySystemStatus();
+            });
+            if (self->core_refresh_seq_.load(std::memory_order_acquire) == seq) {
+                self->system_status = std::move(snap);
+            }
+            finish_one();
+        });
+
+        // 3. Installed packages (~124ms)
+        tasks.Launch([self, tasks, client, seq, finish_one]() -> Task<void> {
+            CorePackagesSnapshot snap = co_await RunWorker([client]() -> CorePackagesSnapshot {
+                CorePackagesSnapshot s;
                 s.installed_raw = client.ListInstalledPackages();
                 s.installed_groups = GroupInstalledPackages(s.installed_raw);
-                s.subos_list = client.ListSubos();
-                s.active_shims = client.ListSubosShims();
-                s.repos = client.ListRepos();
-                s.index_versions = client.ListIndexVersions();
-                s.config = client.QueryConfig();
-                s.local_xpkgs = client.ListLocalXpkgs();
-                s.profiles = client.ListProfiles();
-                s.recent_logs = client.QuerySelfLog(25);
                 return s;
             });
+            if (self->core_refresh_seq_.load(std::memory_order_acquire) == seq) {
+                self->installed_raw = std::move(snap.installed_raw);
+                self->installed_groups = std::move(snap.installed_groups);
 
-            self->version_info = std::move(snap.version_info);
-            self->env = std::move(snap.env);
-            self->system_status = std::move(snap.system_status);
-            self->installed_raw = std::move(snap.installed_raw);
-            self->installed_groups = std::move(snap.installed_groups);
-            self->subos_list = std::move(snap.subos_list);
-            self->active_shims = std::move(snap.active_shims);
-            self->repos = std::move(snap.repos);
-            self->index_versions = std::move(snap.index_versions);
-            self->config = std::move(snap.config);
-            self->local_xpkgs = std::move(snap.local_xpkgs);
-            self->profiles = std::move(snap.profiles);
-            self->recent_logs = std::move(snap.recent_logs);
-            self->refreshing = false;
-            self->initial_loaded = true;
-
-            // Ensure selected installed package stays valid
-            const auto& groups = self->installed_groups.Get();
-            const std::string cur_pkg = self->selected_installed_key.Get();
-            auto pkg_it = std::ranges::find_if(groups, [&](const PkgGroup& g) { return g.key == cur_pkg; });
-            if (pkg_it == groups.end() && !groups.empty()) {
-                self->LoadInstalledDetail(tasks, groups.front());
-            } else if (pkg_it != groups.end()) {
-                self->LoadInstalledDetail(tasks, *pkg_it);
-            } else {
-                self->selected_installed_key = std::string{};
-                self->selected_installed_detail = std::optional<PackageDetail>{};
-                self->selected_installed_versions = std::vector<InstalledVersionItem>{};
+                const auto& groups = self->installed_groups.Get();
+                const std::string cur_pkg = self->selected_installed_key.Get();
+                const bool cur_exists = std::ranges::any_of(
+                    groups, [&](const PkgGroup& g) { return g.key == cur_pkg; });
+                if (groups.empty()) {
+                    self->selected_installed_key = std::string{};
+                    self->selected_installed_detail = std::optional<PackageDetail>{};
+                    self->selected_installed_versions = std::vector<InstalledVersionItem>{};
+                    self->loading_installed_detail = false;
+                } else {
+                    if (!cur_exists) {
+                        self->selected_installed_key = groups.front().key;
+                        self->selected_installed_detail = std::optional<PackageDetail>{};
+                        self->selected_installed_versions = std::vector<InstalledVersionItem>{};
+                    }
+                    if (self->active_nav.Get() == 1) {
+                        self->EnsureInstalledDetailLoaded(tasks, cur_exists);
+                    }
+                }
             }
-
-            // Ensure selected SubOS stays valid
-            const auto& suboses = self->subos_list.Get();
-            std::string subos_sel = self->selected_subos.Get();
-            const bool subos_exists = std::ranges::any_of(suboses, [&](const SubosEntry& e) { return e.name == subos_sel; });
-            if (!subos_exists) {
-                subos_sel = self->env.Get().active_subos;
-                if (subos_sel.empty() && !suboses.empty()) subos_sel = suboses.front().name;
-                self->selected_subos = subos_sel;
-            }
-            if (!subos_sel.empty()) {
-                self->LoadSubosDetail(tasks, subos_sel, {});
-            }
+            finish_one();
         });
+
+        // 4. SubOS + Shims (~84ms)
+        tasks.Launch([self, tasks, client, seq, finish_one]() -> Task<void> {
+            CoreSubosSnapshot snap = co_await RunWorker([client]() -> CoreSubosSnapshot {
+                return CoreSubosSnapshot{
+                    .subos_list = client.ListSubos(),
+                    .active_shims = client.ListSubosShims(),
+                };
+            });
+            if (self->core_refresh_seq_.load(std::memory_order_acquire) == seq) {
+                self->subos_list = std::move(snap.subos_list);
+                self->active_shims = std::move(snap.active_shims);
+
+                const auto& suboses = self->subos_list.Get();
+                std::string subos_sel = self->selected_subos.Get();
+                const bool subos_exists = std::ranges::any_of(
+                    suboses, [&](const SubosEntry& e) { return e.name == subos_sel; });
+                if (!subos_exists) {
+                    subos_sel.clear();
+                    for (const auto& entry : suboses) {
+                        if (entry.active) {
+                            subos_sel = entry.name;
+                            break;
+                        }
+                    }
+                    if (subos_sel.empty()) {
+                        const std::string active_env = self->env.Get().active_subos;
+                        if (!active_env.empty() &&
+                            std::ranges::any_of(suboses, [&](const SubosEntry& e) { return e.name == active_env; })) {
+                            subos_sel = active_env;
+                        } else if (!suboses.empty()) {
+                            subos_sel = suboses.front().name;
+                        }
+                    }
+                    self->selected_subos = subos_sel;
+                    self->loaded_subos_detail_name_.clear();
+                    self->selected_subos_env = std::vector<SubosEnvVar>{};
+                    self->selected_subos_events = std::vector<SubosEvent>{};
+                }
+                if (!subos_sel.empty() && self->active_nav.Get() == 3) {
+                    self->EnsureSubosDetailLoaded(tasks, subos_exists);
+                }
+            }
+            finish_one();
+        });
+
+        // 5. Repos + Recent Logs (~42ms)
+        tasks.Launch([self, client, seq, finish_one]() -> Task<void> {
+            CoreReposLogsSnapshot snap = co_await RunWorker([client]() -> CoreReposLogsSnapshot {
+                return CoreReposLogsSnapshot{
+                    .repos = client.ListRepos(),
+                    .recent_logs = client.QuerySelfLog(25),
+                };
+            });
+            if (self->core_refresh_seq_.load(std::memory_order_acquire) == seq) {
+                self->repos = std::move(snap.repos);
+                self->recent_logs = std::move(snap.recent_logs);
+            }
+            finish_one();
+        });
+    }
+
+    void EnsureInstalledDetailLoaded(TaskScope tasks, bool force = false) {
+        if (loading_installed_detail.Get()) return;
+        const auto& groups = installed_groups.Get();
+        if (groups.empty()) {
+            selected_installed_key = std::string{};
+            selected_installed_detail = std::optional<PackageDetail>{};
+            selected_installed_versions = std::vector<InstalledVersionItem>{};
+            return;
+        }
+        const std::string cur_key = selected_installed_key.Get();
+        auto it = std::ranges::find_if(groups, [&](const PkgGroup& g) { return g.key == cur_key; });
+        const PkgGroup& target = (it != groups.end()) ? *it : groups.front();
+        if (force || cur_key != target.key || !selected_installed_detail.Get().has_value()) {
+            LoadInstalledDetail(tasks, target);
+        }
+    }
+
+    void EnsureSubosDetailLoaded(TaskScope tasks, bool force = false) {
+        if (loading_subos_detail.Get()) return;
+        const auto& suboses = subos_list.Get();
+        if (suboses.empty()) {
+            selected_subos = std::string{};
+            loaded_subos_detail_name_.clear();
+            selected_subos_env = std::vector<SubosEnvVar>{};
+            selected_subos_events = std::vector<SubosEvent>{};
+            return;
+        }
+        std::string target = selected_subos.Get();
+        if (!std::ranges::any_of(suboses, [&](const SubosEntry& e) { return e.name == target; })) {
+            target.clear();
+            for (const auto& entry : suboses) {
+                if (entry.active) {
+                    target = entry.name;
+                    break;
+                }
+            }
+            if (target.empty()) {
+                const std::string active_env = env.Get().active_subos;
+                if (!active_env.empty() &&
+                    std::ranges::any_of(suboses, [&](const SubosEntry& e) { return e.name == active_env; })) {
+                    target = active_env;
+                } else {
+                    target = suboses.front().name;
+                }
+            }
+        }
+        if (!target.empty() && (force || loaded_subos_detail_name_ != target || selected_subos.Get() != target)) {
+            LoadSubosDetail(tasks, target, {});
+        }
+    }
+
+    void RefreshIndexes(TaskScope tasks, bool force = false) {
+        auto self = shared_from_this();
+        const XlingsClient client = client_;
+
+        if (force || (!indexes_loaded.Get() && !loading_indexes.Get())) {
+            loading_indexes = true;
+            tasks.Launch([self, client]() -> Task<void> {
+                IndexesLocalSnapshot snap = co_await RunWorker([client]() -> IndexesLocalSnapshot {
+                    return IndexesLocalSnapshot{
+                        .repos = client.ListRepos(),
+                        .local_xpkgs = client.ListLocalXpkgs(),
+                    };
+                });
+                self->repos = std::move(snap.repos);
+                self->local_xpkgs = std::move(snap.local_xpkgs);
+                self->loading_indexes = false;
+                self->indexes_loaded = true;
+            });
+        }
+
+        if (force || (!index_versions_loaded.Get() && !loading_index_versions.Get())) {
+            loading_index_versions = true;
+            tasks.Launch([self, client]() -> Task<void> {
+                std::vector<IndexRepoVersions> snap = co_await RunWorker([client]() {
+                    return client.ListIndexVersions();
+                });
+                self->index_versions = std::move(snap);
+                self->loading_index_versions = false;
+                self->index_versions_loaded = true;
+            });
+        }
+    }
+
+    void RefreshXlingsConfig(TaskScope tasks, bool force = false) {
+        if (!force && (xlings_config_loaded.Get() || loading_xlings_config.Get())) return;
+        loading_xlings_config = true;
+        auto self = shared_from_this();
+        const XlingsClient client = client_;
+        tasks.Launch([self, client]() -> Task<void> {
+            ConfigSnapshot snap = co_await RunWorker([client]() {
+                return client.QueryConfig();
+            });
+            self->config = std::move(snap);
+            self->loading_xlings_config = false;
+            self->xlings_config_loaded = true;
+        });
+    }
+
+    void RefreshProfiles(TaskScope tasks, bool force = false) {
+        if (!force && (profiles_loaded.Get() || loading_profiles.Get())) return;
+        loading_profiles = true;
+        auto self = shared_from_this();
+        const XlingsClient client = client_;
+        tasks.Launch([self, client]() -> Task<void> {
+            std::vector<ProfileGeneration> snap = co_await RunWorker([client]() {
+                return client.ListProfiles();
+            });
+            self->profiles = std::move(snap);
+            self->loading_profiles = false;
+            self->profiles_loaded = true;
+        });
+    }
+
+    void RefreshAll(TaskScope tasks) {
+        RefreshCore(tasks, true);
+        const std::size_t nav = active_nav.Get();
+        const std::size_t stab = settings_tab.Get();
+        if (nav == 4 || indexes_loaded.Get()) {
+            RefreshIndexes(tasks, true);
+        }
+        if ((nav == 5 && stab == 1) || xlings_config_loaded.Get()) {
+            RefreshXlingsConfig(tasks, true);
+        }
+        if ((nav == 5 && stab == 2) || profiles_loaded.Get()) {
+            RefreshProfiles(tasks, true);
+        }
     }
 
     void LoadInstalledDetail(TaskScope tasks, const PkgGroup& group) {
@@ -342,6 +603,7 @@ public:
                 return s;
             });
             if (self->selected_subos.Get() == snap.name) {
+                self->loaded_subos_detail_name_ = snap.name;
                 self->selected_subos_env = std::move(snap.env_vars);
                 self->selected_subos_events = std::move(snap.events);
                 self->loading_subos_detail = false;
@@ -504,7 +766,7 @@ public:
                 s->has_scanned_updates = false;
                 s->expired_plans = std::vector<ExpiredPackagePlan>{};
                 s->has_scanned_expired = false;
-                s->RefreshAll(t);
+                s->RefreshCore(t, true);
             }
         );
     }
@@ -532,7 +794,7 @@ public:
                     s->expired_plans = std::vector<ExpiredPackagePlan>{};
                     s->has_scanned_expired = false;
                     s->selected_remove_plan = std::optional<RemovePlan>{};
-                    s->RefreshAll(t);
+                    s->RefreshCore(t, true);
                 }
             }
         );
@@ -729,7 +991,8 @@ public:
             [](const std::shared_ptr<XlingsStore>& s, TaskScope t, const CommandOutcome&) {
                 s->updatable_plans = std::vector<UpdatablePackagePlan>{};
                 s->has_scanned_updates = false;
-                s->RefreshAll(t);
+                s->RefreshCore(t, true);
+                if (s->indexes_loaded.Get()) s->RefreshIndexes(t, true);
                 s->ScanUpdatablePackages(t);
             }
         );
@@ -799,7 +1062,7 @@ public:
                 s->has_scanned_updates = false;
                 s->expired_plans = std::vector<ExpiredPackagePlan>{};
                 s->has_scanned_expired = false;
-                s->RefreshAll(t);
+                s->RefreshCore(t, true);
             }
         );
     }
@@ -814,7 +1077,7 @@ public:
                 return client.ActivateVersion(plain_name, version, std::move(on_ev), std::move(ctrl));
             },
             [](const std::shared_ptr<XlingsStore>& s, TaskScope t, const CommandOutcome&) {
-                s->RefreshAll(t);
+                s->RefreshCore(t, true);
             }
         );
     }
@@ -832,7 +1095,8 @@ public:
             [](const std::shared_ptr<XlingsStore>& s, TaskScope t, const CommandOutcome&) {
                 s->updatable_plans = std::vector<UpdatablePackagePlan>{};
                 s->has_scanned_updates = false;
-                s->RefreshAll(t);
+                s->RefreshCore(t, true);
+                if (s->indexes_loaded.Get()) s->RefreshIndexes(t, true);
             }
         );
     }
@@ -848,7 +1112,8 @@ public:
             },
             [name](const std::shared_ptr<XlingsStore>& s, TaskScope t, const CommandOutcome& out) {
                 if (out.ok) s->selected_subos = name;
-                s->RefreshAll(t);
+                s->loaded_subos_detail_name_.clear();
+                s->RefreshCore(t, true);
             }
         );
     }
@@ -864,7 +1129,8 @@ public:
             },
             [name](const std::shared_ptr<XlingsStore>& s, TaskScope t, const CommandOutcome& out) {
                 if (out.ok) s->selected_subos = name;
-                s->RefreshAll(t);
+                s->loaded_subos_detail_name_.clear();
+                s->RefreshCore(t, true);
             }
         );
     }
@@ -879,7 +1145,8 @@ public:
                 return client.RemoveSubos(name, std::move(on_ev), std::move(ctrl));
             },
             [](const std::shared_ptr<XlingsStore>& s, TaskScope t, const CommandOutcome&) {
-                s->RefreshAll(t);
+                s->loaded_subos_detail_name_.clear();
+                s->RefreshCore(t, true);
             }
         );
     }
@@ -894,7 +1161,7 @@ public:
                 return client.AddRepo(name, url, std::move(on_ev), std::move(ctrl));
             },
             [](const std::shared_ptr<XlingsStore>& s, TaskScope t, const CommandOutcome&) {
-                s->RefreshAll(t);
+                s->RefreshIndexes(t, true);
             }
         );
     }
@@ -909,7 +1176,7 @@ public:
                 return client.RemoveRepo(name, std::move(on_ev), std::move(ctrl));
             },
             [](const std::shared_ptr<XlingsStore>& s, TaskScope t, const CommandOutcome&) {
-                s->RefreshAll(t);
+                s->RefreshIndexes(t, true);
             }
         );
     }
@@ -924,7 +1191,7 @@ public:
                 return client.SyncIndex(name, std::move(on_ev), std::move(ctrl));
             },
             [](const std::shared_ptr<XlingsStore>& s, TaskScope t, const CommandOutcome&) {
-                s->RefreshAll(t);
+                s->RefreshIndexes(t, true);
             }
         );
     }
@@ -939,7 +1206,7 @@ public:
                 return client.PinIndexVersion(name, version, std::move(on_line), std::move(ctrl));
             },
             [](const std::shared_ptr<XlingsStore>& s, TaskScope t, const CommandOutcome&) {
-                s->RefreshAll(t);
+                s->RefreshIndexes(t, true);
             }
         );
     }
@@ -954,7 +1221,7 @@ public:
                 return client.AddLocalXpkg(path, std::move(on_line), std::move(ctrl));
             },
             [](const std::shared_ptr<XlingsStore>& s, TaskScope t, const CommandOutcome&) {
-                s->RefreshAll(t);
+                s->RefreshIndexes(t, true);
             }
         );
     }
@@ -969,7 +1236,7 @@ public:
                 return client.RemoveLocalXpkg(name, std::move(on_line), std::move(ctrl));
             },
             [](const std::shared_ptr<XlingsStore>& s, TaskScope t, const CommandOutcome&) {
-                s->RefreshAll(t);
+                s->RefreshIndexes(t, true);
             }
         );
     }
@@ -984,7 +1251,7 @@ public:
                 return client.SetConfigMirror(mirror, std::move(on_line), std::move(ctrl));
             },
             [](const std::shared_ptr<XlingsStore>& s, TaskScope t, const CommandOutcome&) {
-                s->RefreshAll(t);
+                s->RefreshXlingsConfig(t, true);
             }
         );
     }
@@ -999,7 +1266,7 @@ public:
                 return client.SetConfigLang(lang, std::move(on_line), std::move(ctrl));
             },
             [](const std::shared_ptr<XlingsStore>& s, TaskScope t, const CommandOutcome&) {
-                s->RefreshAll(t);
+                s->RefreshXlingsConfig(t, true);
             }
         );
     }
@@ -1014,7 +1281,7 @@ public:
                 return client.SetConfigUiMode(mode, std::move(on_line), std::move(ctrl));
             },
             [](const std::shared_ptr<XlingsStore>& s, TaskScope t, const CommandOutcome&) {
-                s->RefreshAll(t);
+                s->RefreshXlingsConfig(t, true);
             }
         );
     }
@@ -1029,7 +1296,7 @@ public:
                 return client.SetConfigInteractive(enabled, std::move(on_line), std::move(ctrl));
             },
             [](const std::shared_ptr<XlingsStore>& s, TaskScope t, const CommandOutcome&) {
-                s->RefreshAll(t);
+                s->RefreshXlingsConfig(t, true);
             }
         );
     }
@@ -1051,7 +1318,10 @@ public:
             },
             [fix, dry_run](const std::shared_ptr<XlingsStore>& s, TaskScope t, const CommandOutcome& out) {
                 s->doctor_output = out.raw_output;
-                if (fix && !dry_run) s->RefreshAll(t);
+                if (fix && !dry_run) {
+                    s->RefreshCore(t, true);
+                    if (s->xlings_config_loaded.Get()) s->RefreshXlingsConfig(t, true);
+                }
             }
         );
     }
@@ -1067,7 +1337,10 @@ public:
             },
             [dry_run](const std::shared_ptr<XlingsStore>& s, TaskScope t, const CommandOutcome& out) {
                 s->clean_output = out.raw_output;
-                if (!dry_run) s->RefreshAll(t);
+                if (!dry_run) {
+                    s->RefreshCore(t, true);
+                    if (s->xlings_config_loaded.Get()) s->RefreshXlingsConfig(t, true);
+                }
             }
         );
     }
@@ -1082,7 +1355,8 @@ public:
                 return client.RunSelfUpdate(std::move(on_line), std::move(ctrl));
             },
             [](const std::shared_ptr<XlingsStore>& s, TaskScope t, const CommandOutcome&) {
-                s->RefreshAll(t);
+                s->RefreshCore(t, true);
+                if (s->xlings_config_loaded.Get()) s->RefreshXlingsConfig(t, true);
             }
         );
     }
@@ -1097,7 +1371,7 @@ public:
                 return client.CommitProfile(reason, std::move(on_line), std::move(ctrl));
             },
             [](const std::shared_ptr<XlingsStore>& s, TaskScope t, const CommandOutcome&) {
-                s->RefreshAll(t);
+                s->RefreshProfiles(t, true);
             }
         );
     }
@@ -1112,7 +1386,8 @@ public:
                 return client.RollbackProfile(generation, std::move(on_line), std::move(ctrl));
             },
             [](const std::shared_ptr<XlingsStore>& s, TaskScope t, const CommandOutcome&) {
-                s->RefreshAll(t);
+                s->RefreshProfiles(t, true);
+                s->RefreshCore(t, true);
             }
         );
     }
@@ -1223,7 +1498,7 @@ private:
                 s->expired_plans = std::vector<ExpiredPackagePlan>{};
                 s->has_scanned_expired = false;
                 s->selected_remove_plan = std::optional<RemovePlan>{};
-                s->RefreshAll(t);
+                s->RefreshCore(t, true);
             }
         );
     }
@@ -1231,6 +1506,8 @@ private:
     XlingsClient client_;
     std::shared_ptr<ActiveProcessControl> active_process_;
     std::atomic<std::uint64_t> search_seq_{0};
+    std::atomic<std::uint64_t> core_refresh_seq_{0};
+    std::string loaded_subos_detail_name_;
 };
 
 } // namespace hxlings

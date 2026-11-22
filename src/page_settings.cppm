@@ -1,10 +1,12 @@
 export module hxlings.page.settings;
 
 import std;
+import mcpplibs.os;
 import huxerui;
 import xlings.types;
 import hxlings.theme;
 import hxlings.icons;
+import hxlings.settings;
 import hxlings.store;
 import hxlings.components;
 
@@ -31,15 +33,31 @@ View SettingsPage() {
     const DialogHandle dialog = UseDialog();
     const ThemeSpec& theme = UseTheme();
     const StatusPalette sp = ResolveStatusPalette(theme);
-    const auto clipboard = UseApplication().Clipboard();
+    const ApplicationHandle app = UseApplication();
+    const auto clipboard = app.Clipboard();
+    const SystemTrayHandle tray = app.SystemTray();
+    const bool tray_available = tray.IsAvailable();
 
     auto commit_reason = UseState(TextEditingValue::FromText(""));
 
+    const std::size_t tab = store->settings_tab.Get();
+    const AppSettings app_cfg = store->app_settings.Get();
     const auto& cfg = store->config.Get();
     const auto& env = store->env.Get();
     const auto& profiles = store->profiles.Get();
+    const bool loading_cfg = store->loading_xlings_config.Get();
+    const bool loading_prof = store->loading_profiles.Get();
     const std::string& doctor_out = store->doctor_output.Get();
     const std::string& clean_out = store->clean_output.Get();
+
+    Lifecycle([store, tasks, tab] {
+        if (store->skip_initial_refresh || store->active_nav.Get() != 5) return;
+        if (tab == 1) {
+            store->RefreshXlingsConfig(tasks, false);
+        } else if (tab == 2) {
+            store->RefreshProfiles(tasks, false);
+        }
+    }, store->active_nav.Get(), tab);
 
     constexpr std::array<std::string_view, 2> kMirrors{"CN", "GLOBAL"};
     constexpr std::array<std::string_view, 3> kLangs{"auto", "zh", "en"};
@@ -54,7 +72,23 @@ View SettingsPage() {
 
     View config_card = Card(
         Column {
-            SectionHeader("xlings 核心配置", "修改将直接写入 xlings 全局配置"),
+            SectionHeader(
+                "xlings 核心配置",
+                "修改将直接写入 xlings 全局配置（仅在进入本标签页时按需读取）",
+                Row {
+                    loading_cfg
+                        ? View(ProgressCircle().With(Frame{.width = 16.0F, .height = 16.0F}))
+                        : View{},
+                    ActionButton(
+                        "重新读取配置",
+                        ButtonTone::Secondary,
+                        [store, tasks] { store->RefreshXlingsConfig(tasks, true); },
+                        !loading_cfg,
+                        icons::RefreshIcon(),
+                        true
+                    ),
+                }.With(Spacing(8.0F), CrossAlign(CrossAxisAlignment::Center))
+            ),
             Row {
                 Column {
                     Text("下载镜像源 (mirror)", TextRole::Label)
@@ -269,9 +303,23 @@ View SettingsPage() {
             }.With(Spacing(8.0F)),
             clean_out.empty() ? View{} : CodeBox(clean_out, 90.0F, 180.0F),
             Divider(),
-            Text("Profile 配置代际 (xlings profile)", TextRole::Title)
-                .Style(TextStyle{.font = Font::System(14.5F).WithWeight(FontWeight::SemiBold),
-                                 .foreground = theme.colors.on_surface}),
+            Row {
+                Text("Profile 配置代际 (xlings profile)", TextRole::Title)
+                    .Style(TextStyle{.font = Font::System(14.5F).WithWeight(FontWeight::SemiBold),
+                                     .foreground = theme.colors.on_surface})
+                    .With(Grow(1.0F)),
+                loading_prof
+                    ? View(ProgressCircle().With(Frame{.width = 15.0F, .height = 15.0F}))
+                    : View{},
+                ActionButton(
+                    "刷新代际",
+                    ButtonTone::Secondary,
+                    [store, tasks] { store->RefreshProfiles(tasks, true); },
+                    !loading_prof,
+                    icons::RefreshIcon(),
+                    true
+                ),
+            }.With(Spacing(8.0F), CrossAlign(CrossAxisAlignment::Center)),
             Row {
                 TextField(commit_reason)
                     .Placeholder("快照备注 (可选，例如: before upgrading llvm)")
@@ -302,7 +350,7 @@ View SettingsPage() {
     const auto presets = BrandPresets();
     for (std::size_t i = 0; i < presets.size(); ++i) {
         const Color preset = presets[i];
-        const bool active = preset == store->brand_color.Get();
+        const bool active = static_cast<int>(i) == app_cfg.brand_preset_index || preset == store->brand_color.Get();
         swatches.push_back(
             Row {}
                 .With(
@@ -317,43 +365,112 @@ View SettingsPage() {
                     PointerCursor(PointerCursorKind::Hand),
                     Semantics{.role = SemanticRole::Button, .label = "主题强调色", .selected = active}
                 )
-                .OnClick([store, preset] { store->brand_color = preset; })
+                .OnClick([store, idx = static_cast<int>(i)] { store->SetBrandPresetIndex(idx); })
                 .Key("swatch-" + std::to_string(i))
         );
     }
 
     View appearance_card = Card(
         Column {
-            SectionHeader("Hxlings 界面外观"),
+            SectionHeader("Hxlings 界面外观", "调整客户端深浅色主题与强调色，立即生效并保存到本地"),
             Row {
-                Text("深色模式", TextRole::Body)
-                    .Style(TextStyle{.font = Font::System(14.0F), .foreground = theme.colors.on_surface})
-                    .With(Grow(1.0F)),
-                Switch("深色模式", store->dark_mode)
-                    .OnChanged([store](bool dark) { store->dark_mode = dark; }),
-            }.With(CrossAlign(CrossAxisAlignment::Center)),
+                Column {
+                    Text("深色模式", TextRole::Body)
+                        .Style(TextStyle{.font = Font::System(14.0F), .foreground = theme.colors.on_surface}),
+                    Text("切换客户端明暗配色（不影响 xlings CLI）", TextRole::Label)
+                        .Style(TextStyle{.font = Font::System(12.0F), .foreground = theme.colors.on_surface_variant}),
+                }.With(Spacing(2.0F), Grow(1.0F)),
+                Switch("开启", app_cfg.dark_mode)
+                    .OnChanged([store](bool dark) { store->SetDarkMode(dark); }),
+            }.With(Spacing(12.0F), CrossAlign(CrossAxisAlignment::Center)),
             Row {
                 Text("主题强调色", TextRole::Body)
                     .Style(TextStyle{.font = Font::System(14.0F), .foreground = theme.colors.on_surface})
                     .With(Grow(1.0F)),
                 Row(std::move(swatches)).With(Spacing(10.0F), CrossAlign(CrossAxisAlignment::Center)),
-            }.With(CrossAlign(CrossAxisAlignment::Center)),
-        }.With(Spacing(12.0F), CrossAlign(CrossAxisAlignment::Stretch))
+            }.With(Spacing(12.0F), CrossAlign(CrossAxisAlignment::Center)),
+        }.With(Spacing(14.0F), CrossAlign(CrossAxisAlignment::Stretch))
     );
 
-    return ScrollView(
+    View tray_card = Card(
         Column {
+            SectionHeader(
+                "系统托盘与窗口行为",
+                "管理状态栏/系统托盘驻留及关闭窗口时的默认动作",
+                StatusBadge(
+                    tray_available ? "托盘宿主可用" : "未检测到系统托盘",
+                    tray_available ? sp.success : sp.warning,
+                    tray_available ? sp.success_bg : sp.warning_bg
+                )
+            ),
+            Row {
+                Column {
+                    Text("启用系统托盘图标", TextRole::Body)
+                        .Style(TextStyle{.font = Font::System(14.0F), .foreground = theme.colors.on_surface}),
+                    Text("在系统托盘展示快速切换页面、刷新与退出菜单", TextRole::Label)
+                        .Style(TextStyle{.font = Font::System(12.0F), .foreground = theme.colors.on_surface_variant}),
+                }.With(Spacing(2.0F), Grow(1.0F)),
+                Switch("启用", app_cfg.tray_enabled)
+                    .OnChanged([store](bool enabled) { store->SetTrayEnabled(enabled); }),
+            }.With(Spacing(12.0F), CrossAlign(CrossAxisAlignment::Center)),
+            Row {
+                Column {
+                    Text("关闭窗口时最小化到托盘", TextRole::Body)
+                        .Style(TextStyle{.font = Font::System(14.0F), .foreground = theme.colors.on_surface}),
+                    Text("仅当托盘可用时隐藏窗口；使用托盘退出或 macOS ⌘Q 可彻底结束进程", TextRole::Label)
+                        .Style(TextStyle{.font = Font::System(12.0F), .foreground = theme.colors.on_surface_variant}),
+                }.With(Spacing(2.0F), Grow(1.0F)),
+                Switch("驻留", app_cfg.close_to_tray)
+                    .With(Enabled(app_cfg.tray_enabled))
+                    .OnChanged([store](bool enabled) { store->SetCloseToTray(enabled); }),
+            }.With(Spacing(12.0F), CrossAlign(CrossAxisAlignment::Center)),
+        }.With(Spacing(14.0F), CrossAlign(CrossAxisAlignment::Stretch))
+    );
+
+    const std::string settings_path = mcpplibs::os::fs::utf8(DefaultAppSettingsPath());
+    View storage_card = Card(
+        Column {
+            SectionHeader("应用本地配置", "与 xlings 全局 CLI 配置完全解耦，启动即零阻塞加载"),
+            KeyValueRow("本地配置文件", settings_path, true, true),
+        }.With(Spacing(10.0F), CrossAlign(CrossAxisAlignment::Stretch))
+    );
+
+    View tab_bar = Row {
+        SegmentedButton({"Hxlings 应用设置", "xlings 全局配置", "环境诊断与维护"}, tab)
+            .OnChanged([store](std::size_t idx) { store->settings_tab = idx; })
+            .Key("settings-tabs"),
+        Spacer{}.With(Grow(1.0F)),
+    }.With(
+        Padding(EdgeInsets{.left = 22.0F, .top = 16.0F, .right = 22.0F, .bottom = 12.0F}),
+        Background(theme.colors.surface),
+        CrossAlign(CrossAxisAlignment::Center)
+    );
+
+    View body_content = View{};
+    if (tab == 0) {
+        body_content = Column {
+            std::move(appearance_card),
+            std::move(tray_card),
+            std::move(storage_card),
+        }.With(Padding(22.0F), Spacing(16.0F), CrossAlign(CrossAxisAlignment::Stretch)).Key("settings-tab-0");
+    } else if (tab == 1) {
+        body_content = Column {
             std::move(config_card),
+        }.With(Padding(22.0F), Spacing(16.0F), CrossAlign(CrossAxisAlignment::Stretch)).Key("settings-tab-1");
+    } else {
+        body_content = Column {
             std::move(doctor_card),
             std::move(maintenance_card),
-            std::move(appearance_card),
-        }.With(
-            Padding(22.0F),
-            Spacing(16.0F),
-            CrossAlign(CrossAxisAlignment::Stretch)
-        )
-    ).ScrollAxis(Axis::Vertical)
-        .With(Grow(1.0F), ScrollBar{});
+        }.With(Padding(22.0F), Spacing(16.0F), CrossAlign(CrossAxisAlignment::Stretch)).Key("settings-tab-2");
+    }
+
+    return Column {
+        std::move(tab_bar),
+        Divider(),
+        ScrollView(std::move(body_content))
+            .ScrollAxis(Axis::Vertical)
+            .With(Grow(1.0F), ScrollBar{}),
+    }.With(Grow(1.0F), CrossAlign(CrossAxisAlignment::Stretch));
 }
 
 } // namespace hxlings

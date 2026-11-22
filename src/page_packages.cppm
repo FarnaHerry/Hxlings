@@ -595,6 +595,12 @@ View PackagesPage() {
         }
     }, store->focus_search_nonce.Get());
 
+    Lifecycle([store, tasks] {
+        if (!store->skip_initial_refresh && store->active_nav.Get() == 1) {
+            store->EnsureInstalledDetailLoaded(tasks, false);
+        }
+    }, store->active_nav.Get(), store->installed_groups.Get().size());
+
     Lifecycle([store, tasks, dialog, toast] {
         if (store->open_batch_update_nonce.Get() > 0) {
             tasks.Post([store, tasks, dialog, toast] {

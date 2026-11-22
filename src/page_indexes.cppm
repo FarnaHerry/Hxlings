@@ -126,9 +126,18 @@ View IndexesPage() {
     const ThemeSpec& theme = UseTheme();
     const StatusPalette sp = ResolveStatusPalette(theme);
 
+    Lifecycle([store, tasks] {
+        if (!store->skip_initial_refresh && store->active_nav.Get() == 4) {
+            store->RefreshIndexes(tasks, false);
+        }
+    }, store->active_nav.Get());
+
     const auto& repos = store->repos.Get();
     const auto& idx_versions = store->index_versions.Get();
     const auto& local_xpkgs = store->local_xpkgs.Get();
+    const bool loading_indexes = store->loading_indexes.Get();
+    const bool loading_idx_versions = store->loading_index_versions.Get();
+    const bool idx_versions_loaded = store->index_versions_loaded.Get();
 
     std::vector<View> repo_rows;
     for (std::size_t i = 0; i < repos.size(); ++i) {
@@ -189,18 +198,28 @@ View IndexesPage() {
             SectionHeader(
                 "索引仓库 (Index Repositories)",
                 "管理全局 xim 包索引仓库及远程地址",
-                ActionButton(
-                    "添加 / 更新仓库",
-                    ButtonTone::Primary,
-                    [dialog, store, tasks, toast] {
-                        dialog.Show([store, tasks, toast](DialogContext ctx) {
-                            return AddRepoDialogContent(ctx, store, tasks, toast);
-                        });
-                    },
-                    true,
-                    icons::PlusIcon(),
-                    true
-                )
+                Row {
+                    ActionButton(
+                        "刷新索引与快照",
+                        ButtonTone::Secondary,
+                        [store, tasks] { store->RefreshIndexes(tasks, true); },
+                        !loading_indexes && !loading_idx_versions,
+                        icons::RefreshIcon(),
+                        true
+                    ),
+                    ActionButton(
+                        "添加 / 更新仓库",
+                        ButtonTone::Primary,
+                        [dialog, store, tasks, toast] {
+                            dialog.Show([store, tasks, toast](DialogContext ctx) {
+                                return AddRepoDialogContent(ctx, store, tasks, toast);
+                            });
+                        },
+                        true,
+                        icons::PlusIcon(),
+                        true
+                    ),
+                }.With(Spacing(8.0F), CrossAlign(CrossAxisAlignment::Center))
             ),
             repo_rows.empty()
                 ? Text("暂无已配置的索引仓库", TextRole::Body)
@@ -366,7 +385,48 @@ View IndexesPage() {
 
     std::vector<View> sections;
     sections.push_back(std::move(repos_card));
-    for (auto& c : idx_cards) sections.push_back(std::move(c));
+    if (idx_cards.empty()) {
+        if (loading_idx_versions) {
+            sections.push_back(
+                Card(
+                    Row {
+                        ProgressCircle().With(Frame{.width = 16.0F, .height = 16.0F}),
+                        Column {
+                            Text("正在后台查询远程索引快照版本...", TextRole::Body)
+                                .Style(TextStyle{.font = Font::System(13.5F).WithWeight(FontWeight::SemiBold),
+                                                 .foreground = theme.colors.on_surface}),
+                            Text("此操作不会阻塞仓库列表与本地配方操作", TextRole::Label)
+                                .Style(TextStyle{.foreground = theme.colors.on_surface_variant}),
+                        }.With(Spacing(2.0F), Grow(1.0F)),
+                    }.With(Spacing(12.0F), CrossAlign(CrossAxisAlignment::Center))
+                )
+            );
+        } else if (!idx_versions_loaded) {
+            sections.push_back(
+                Card(
+                    Row {
+                        Column {
+                            Text("尚未查询远程索引快照", TextRole::Body)
+                                .Style(TextStyle{.font = Font::System(13.5F).WithWeight(FontWeight::SemiBold),
+                                                 .foreground = theme.colors.on_surface}),
+                            Text("点击右侧按钮按需拉取历史索引快照与固定状态", TextRole::Label)
+                                .Style(TextStyle{.foreground = theme.colors.on_surface_variant}),
+                        }.With(Spacing(2.0F), Grow(1.0F)),
+                        ActionButton(
+                            "立即查询快照",
+                            ButtonTone::Secondary,
+                            [store, tasks] { store->RefreshIndexes(tasks, true); },
+                            true,
+                            icons::RefreshIcon(),
+                            true
+                        ),
+                    }.With(Spacing(12.0F), CrossAlign(CrossAxisAlignment::Center))
+                )
+            );
+        }
+    } else {
+        for (auto& c : idx_cards) sections.push_back(std::move(c));
+    }
     sections.push_back(std::move(xpkg_card));
 
     return ScrollView(

@@ -17,6 +17,7 @@
 
 import app;
 import hxlings.shortcuts;
+import hxlings.settings;
 import hxlings.store;
 import xlings.types;
 import xlings.parser;
@@ -86,6 +87,11 @@ std::shared_ptr<XlingsStore> MakeSeededStore() {
     auto store = std::make_shared<XlingsStore>();
     store->skip_initial_refresh = true;
     store->initial_loaded = true;
+    store->indexes_loaded = true;
+    store->index_versions_loaded = true;
+    store->xlings_config_loaded = true;
+    store->profiles_loaded = true;
+    store->InitAppSettings(AppSettings{});
 
     store->version_info = XlingsVersionInfo{
         .version = "2026.11.22.1",
@@ -1030,20 +1036,33 @@ void AuditAllPagesAtViewport(
         }
     }
 
-    // Settings
+    // Settings (3 tabs: App Settings, xlings Config, Diagnostics & Maintenance)
     SafeTap(ctx, vp_tag + " / Settings", ui.Find(UiSelector::Key("nav-settings")), "nav-settings");
     ui.Pump();
-    AuditCurrentScreen(ctx, ui, w, h, "Settings", "page-settings");
+    AuditCurrentScreen(ctx, ui, w, h, "Settings[App]", "page-settings");
+
+    if (SafeTap(ctx, vp_tag + " / Settings[XlingsConfig]", ui.Find(UiSelector::Text("xlings 全局配置")), "xlings 全局配置")) {
+        ui.Pump();
+        AuditCurrentScreen(ctx, ui, w, h, "Settings[XlingsConfig]", "page-settings");
+    }
+
+    if (SafeTap(ctx, vp_tag + " / Settings[Maintenance]", ui.Find(UiSelector::Text("环境诊断与维护")), "环境诊断与维护")) {
+        ui.Pump();
+        AuditCurrentScreen(ctx, ui, w, h, "Settings[Maintenance]", "page-settings");
+    }
+
+    SafeTap(ctx, vp_tag + " / Settings[AppReset]", ui.Find(UiSelector::Text("Hxlings 应用设置")), "Hxlings 应用设置");
+    ui.Pump();
 
     // Dark mode check on Dashboard & Settings
-    store->dark_mode = true;
+    store->SetDarkMode(true);
     ui.Pump();
     AuditCurrentScreen(ctx, ui, w, h, "Settings(Dark)", "page-settings");
     SafeTap(ctx, vp_tag + " / Dashboard(Dark)", ui.Find(UiSelector::Key("nav-dashboard")), "nav-dashboard");
     ui.Pump();
     AuditCurrentScreen(ctx, ui, w, h, "Dashboard(Dark)", "page-dashboard");
 
-    store->dark_mode = false;
+    store->SetDarkMode(false);
     ui.Pump();
 }
 
@@ -1137,7 +1156,7 @@ void TestDuplicateDataNoDuplicateKeys(AuditContext& ctx, UiTest& ui, const std::
 void TestCrossPlatformShortcuts(AuditContext& ctx, UiTest& ui, const std::shared_ptr<XlingsStore>& store) {
     ui.SetWindowMetrics({.viewport = {1180.0F, 760.0F}});
     store->active_nav = 0;
-    store->dark_mode = false;
+    store->SetDarkMode(false);
     store->console_expanded = false;
     ui.Pump();
 

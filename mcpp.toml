@@ -9,8 +9,12 @@ authors     = ["FarnaHerry <FarnaHerry@users.noreply.github.com>"]
 platforms   = ["linux", "windows", "macos"]
 
 [package.metadata.huxerui]
-name = "Hxlings"
-id   = "io.github.farnaherry.hxlings"
+name      = "Hxlings"
+id        = "io.github.farnaherry.hxlings"
+resources = "resources"
+
+[resources]
+icon = "platform/windows/app.ico"
 
 [dependencies.huxerui]
 huxerui = { git = "https://github.com/HuxerUI/HuxerUI.git", branch = "main" }

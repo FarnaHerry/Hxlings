@@ -12,9 +12,11 @@
 - **探索与安装**：基于 `xlings interface search_packages` 检索软件包与分类，支持选择版本与目标 SubOS、预览依赖安装计划（`plan_install`）、实时流式安装。
 - **SubOS 环境**：新建/切换/删除 SubOS 子系统，查看活跃 Shims 命令（点击复制）、SubOS 环境变量、在指定 SubOS 内执行命令（支持沙箱模式）以及审计事件。
 - **索引与配方**：管理全局索引仓库（添加/更新/移除/同步）、切换或固定历史索引快照版本、注册与移除本地 `.lua` xpkg 配方。
-- **设置与诊断**：切换 `mirror` / `lang` / `ui-mode` / `interactive`，运行 `self doctor` 各模式诊断与修复、缓存清理预演与执行、`self update`、`profile` 代际快照提交与回滚，以及浅色/深色主题与强调色切换。
+- **设置与诊断**：采用 3 标签页解耦设计——**Hxlings 应用设置**（深色模式、强调色、系统托盘开关与关闭时最小化到托盘，以 `settings.json` 持久化在用户配置目录、启动 0 ms 加载）、**xlings 全局配置**（按需读取/修改 `mirror` / `lang` / `ui-mode` / `interactive`）与 **环境诊断与维护**（`self doctor` 诊断修复、缓存清理、`self update`、`profile` 代际快照提交与回滚）。
+- **渐进式并发加载与按需拉取**：启动时并发执行 5 组核心只读查询并在 ~10 ms 呈现主界面骨架，将耗时的远程 `list_index_versions`、包/SubOS 详情与 `config`/`profile` 查询改为进入对应页面或标签页时后台按需加载，不再阻塞启动与日常操作。
+- **系统托盘、品牌图标与跨平台支持**：支持跨平台系统托盘图标（快速切页、刷新状态、批量检查更新、显示/退出）、关闭窗口最小化到托盘（`⌘Q` 与托盘“退出”始终彻底结束进程），并为标题栏、Windows PE/MSI/Setup、macOS Dock/`.app`/DMG 与 Linux 桌面提供统一品牌 Logo。
 - **底部任务控制台**：所有长耗时操作均通过后台流式执行，支持实时进度条、中断取消、日志展开与一键复制。
-- **纯 C++23 Modules 与跨平台快捷键**：`src/` 全量采用纯 C++23 Modules（零 `#include` 与预处理宏，Windows 子系统/入口点由 `mcpp.toml` 声明，跨平台进程与环境管理基于 `mcpplibs.os`），支持 macOS（`⌘`）与 Linux/Windows（`Ctrl`）原生快捷键体系。
+- **纯 C++23 Modules 与跨平台快捷键**：`src/` 全量采用纯 C++23 Modules（零 `#include` 与预处理宏，Windows 子系统/入口点与资源图标由 `mcpp.toml` 声明，跨平台进程/环境/配置目录基于 `mcpplibs.os`），支持 macOS（`⌘`）与 Linux/Windows（`Ctrl`）原生快捷键体系。
 
 ## 快捷键（macOS / Linux & Windows）
 
@@ -55,9 +57,9 @@ mcpp pack hxlings --release --pkg-format dmg        # macOS DMG 磁盘镜像
 
 ## 发布产物矩阵（Release）
 
-- **Linux (`x86_64`)**：`.tar.gz` 便携归档、`.deb`、`.rpm`、`.AppImage`（附带桌面图标 [hxlings.svg](platform/linux/package/hxlings.svg) 与 `.desktop` 入口）
-- **Windows (`x86_64`)**：`.zip` 便携归档、`.msi`、`-setup.exe`（WiX Burn 安装器）
-- **macOS (`arm64`)**：`.tar.gz` 便携归档、`.dmg`（含 `Hxlings.app` 与 `/Applications` 快捷方式）
+- **Linux (`x86_64`)**：`.tar.gz` 便携归档、`.deb`、`.rpm`、`.AppImage`（附带桌面图标 [hxlings.svg](platform/linux/package/hxlings.svg)、应用/托盘 PNG 与 `.desktop` 入口）
+- **Windows (`x86_64`)**：`.zip` 便携归档、`.msi`、`-setup.exe`（WiX Burn 安装器，内嵌 [app.ico](platform/windows/app.ico)）
+- **macOS (`arm64`)**：`.tar.gz` 便携归档、`.dmg`（含 `Hxlings.app`、[AppIcon.icns](platform/macos/AppIcon.icns) 与 `/Applications` 快捷方式）
 - **校验文件**：随 Release 一并发布 `SHA256SUMS.txt`
 
 ## 说明

@@ -120,6 +120,8 @@ jobs:
           test -s "$tar_out"
           tar_list=$(tar -tzf "$tar_out")
           printf '%s\n' "$tar_list" | grep -q 'hxlings.resources/huxerui/resources.bin'
+          printf '%s\n' "$tar_list" | grep -q 'hxlings\.resources/huxerui/app/images/hxlings\.png'
+          printf '%s\n' "$tar_list" | grep -q 'hxlings\.resources/huxerui/app/images/tray_icon\.png'
           printf '%s\n' "$tar_list" | grep -q 'dropdown_indicator\.huxv'
 
           deb_src=$(mcpp pack hxlings --release --pkg-format deb --message-format json | extract_pack_path)
@@ -130,6 +132,8 @@ jobs:
           deb_list=$(dpkg-deb -c "$deb_out")
           echo "$deb_list" | grep -q '/usr/bin/hxlings'
           echo "$deb_list" | grep -q 'hxlings\.resources/huxerui/resources\.bin'
+          echo "$deb_list" | grep -q 'hxlings\.resources/huxerui/app/images/hxlings\.png'
+          echo "$deb_list" | grep -q 'hxlings\.resources/huxerui/app/images/tray_icon\.png'
           echo "$deb_list" | grep -q '/usr/share/applications/hxlings\.desktop'
           echo "$deb_list" | grep -q '/usr/share/icons/hicolor/scalable/apps/hxlings\.svg'
 
@@ -237,6 +241,8 @@ jobs:
           test -s "$tar_out"
           tar_list=$(tar -tzf "$tar_out")
           printf '%s\n' "$tar_list" | grep -Eq '(hxlings\.resources|HuxerUI)/huxerui/resources\.bin'
+          printf '%s\n' "$tar_list" | grep -q 'huxerui/app/images/hxlings\.png'
+          printf '%s\n' "$tar_list" | grep -q 'huxerui/app/images/tray_icon\.png'
           printf '%s\n' "$tar_list" | grep -q 'dropdown_indicator\.huxv'
 
           dmg_src=$(mcpp pack hxlings --release --pkg-format dmg --message-format json | extract_pack_path)
@@ -398,6 +404,12 @@ jobs:
           if ($exeEntry.Size -lt 1MB) { throw "the MSI hxlings.exe is implausibly small ($($exeEntry.Size) bytes)" }
           if (-not ($files | Where-Object { $_.Name -like '*resources.bin*' })) {
             throw 'the MSI does not carry huxerui/resources.bin'
+          }
+          if (-not ($files | Where-Object { $_.Name -like '*hxlings.png*' })) {
+            throw 'the MSI does not carry huxerui/app/images/hxlings.png'
+          }
+          if (-not ($files | Where-Object { $_.Name -like '*tray_icon.png*' })) {
+            throw 'the MSI does not carry huxerui/app/images/tray_icon.png'
           }
 
           if ((Get-Item $setupOut).Length -le (Get-Item $msiOut).Length) {

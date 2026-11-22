@@ -139,6 +139,12 @@ View SubosPage() {
         }
     }, store->focus_search_nonce.Get());
 
+    Lifecycle([store, tasks] {
+        if (!store->skip_initial_refresh && store->active_nav.Get() == 3) {
+            store->EnsureSubosDetailLoaded(tasks, false);
+        }
+    }, store->active_nav.Get(), store->subos_list.Get().size());
+
     const auto& suboses = store->subos_list.Get();
     const std::string selected_name = store->selected_subos.Get();
     const auto& shims = store->active_shims.Get();

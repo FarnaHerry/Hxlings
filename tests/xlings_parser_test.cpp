@@ -2,6 +2,7 @@ import std;
 import xlings.types;
 import xlings.parser;
 import xlings.process;
+import hxlings.settings;
 
 using namespace hxlings;
 
@@ -360,6 +361,41 @@ void TestProcessStreamingAndCancel() {
           "RunProcessStreaming respects pre-cancelled ActiveProcessControl");
 }
 
+void TestAppSettingsSerializationAndPersistence() {
+    {
+        const AppSettings def = ParseAppSettingsJson("{}");
+        Check(!def.dark_mode && def.brand_preset_index == 0 && def.tray_enabled && def.close_to_tray,
+              "ParseAppSettingsJson uses expected defaults on empty object");
+    }
+    {
+        const AppSettings invalid = ParseAppSettingsJson("not json");
+        Check(invalid == AppSettings{}, "ParseAppSettingsJson falls back to defaults on invalid JSON");
+    }
+    {
+        const AppSettings clamped = ParseAppSettingsJson("{\"brand_preset_index\": -3}");
+        Check(clamped.brand_preset_index == 0, "ParseAppSettingsJson clamps negative brand_preset_index");
+    }
+    {
+        const AppSettings expected{
+            .dark_mode = true,
+            .brand_preset_index = 4,
+            .tray_enabled = false,
+            .close_to_tray = false,
+        };
+        const std::string encoded = SerializeAppSettingsJson(expected);
+        const AppSettings decoded = ParseAppSettingsJson(encoded);
+        Check(decoded == expected, "SerializeAppSettingsJson round-trips all fields");
+
+        std::error_code ec;
+        const auto dir = std::filesystem::temp_directory_path(ec) / "hxlings-settings-test";
+        std::filesystem::remove_all(dir, ec);
+        const auto file = dir / "settings.json";
+        Check(SaveAppSettings(expected, file), "SaveAppSettings persists settings file");
+        Check(LoadAppSettings(file) == expected, "LoadAppSettings reads persisted settings cleanly");
+        std::filesystem::remove_all(dir, ec);
+    }
+}
+
 } // namespace
 
 int main() {
@@ -375,6 +411,7 @@ int main() {
     TestParsePayloadStatusAndUpdatablePlans();
     TestWhitespaceAndSearchNormalization();
     TestProcessStreamingAndCancel();
+    TestAppSettingsSerializationAndPersistence();
 
     if (failures == 0) {
         std::println("All parser and xlings integration tests passed.");

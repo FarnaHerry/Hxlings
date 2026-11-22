@@ -34,10 +34,18 @@ View DashboardPage() {
     const auto& logs = store->recent_logs.Get();
     const bool refreshing = store->refreshing.Get();
     const bool loaded = store->initial_loaded.Get();
+    const bool loading_idx = store->loading_index_versions.Get();
+    const bool idx_loaded = store->index_versions_loaded.Get();
 
-    std::string active_snap = "—";
+    std::string active_snap_label;
     if (!idx_vers.empty() && !idx_vers.front().current.empty()) {
-        active_snap = idx_vers.front().current;
+        active_snap_label = "当前快照: " + idx_vers.front().current;
+    } else if (loading_idx) {
+        active_snap_label = "索引快照后台查询中...";
+    } else if (idx_loaded) {
+        active_snap_label = "当前快照: —";
+    } else {
+        active_snap_label = "点击进入索引页按需查询";
     }
 
     View hero_badges = Flow {
@@ -100,6 +108,7 @@ View DashboardPage() {
             ButtonTone::Secondary,
             [store, tasks, toast] {
                 store->RunDoctorAsync(tasks, toast, false, false, false, false);
+                store->settings_tab = 2;
                 store->active_nav = 5;
             },
             true,
@@ -111,6 +120,7 @@ View DashboardPage() {
             ButtonTone::Secondary,
             [store, tasks, toast] {
                 store->RunSelfCleanAsync(tasks, toast, true);
+                store->settings_tab = 2;
                 store->active_nav = 5;
             },
             true,
@@ -204,7 +214,7 @@ View DashboardPage() {
         StatCard(
             "索引仓库",
             std::to_string(repos.size()),
-            "当前快照: " + active_snap,
+            active_snap_label,
             icons::IndexIcon(),
             sp.warning,
             [store] { store->active_nav = 4; }
@@ -254,6 +264,7 @@ View DashboardPage() {
                             ButtonTone::Secondary,
                             [store, tasks, toast] {
                                 store->RunDoctorAsync(tasks, toast, true, true, true, false);
+                                store->settings_tab = 2;
                                 store->active_nav = 5;
                             },
                             true,
