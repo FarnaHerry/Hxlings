@@ -1,0 +1,53 @@
+---
+name: cross-platform-packaging-icons
+description: >-
+  Use this skill when regenerating or changing application/tray icons, modifying
+  mcpp.toml packaging or resource metadata, updating build.mcpp packaging logic,
+  adjusting Linux/macOS/Windows native window icon behavior in
+  src/platform_icon.cppm, or editing .github/workflows/ci.yml or release.yml.
+---
+
+# Cross-Platform Packaging, Logo Assets & Release Skill
+
+本指南说明 Hxlings 品牌 Logo 资产管线、`mcpp.toml` 声明、三端原生任务栏/Dock 图标适配以及打包与 CI/Release 验证步骤。
+
+## 1. Logo 资产源文件与派生生成
+
+唯一设计源为矢量文件 [hxlings.svg](../../platform/linux/package/hxlings.svg)，修改 Logo 后需同步重新生成 4 个派生文件（使用本机 `python3` + `cairosvg` + `Pillow`）：
+- `resources/images/hxlings.png`：256×256 RGBA PNG（供窗口标题栏 `app::images::hxlings`、macOS `NSImage` 及 Linux GTK 主题检索）
+- `resources/images/tray_icon.png`：64×64 RGBA PNG（供 `SystemTrayHandle::Show(app::images::tray_icon, ...)`）
+- `platform/windows/app.ico`：包含 16、24、32、48、64、128、256 多分辨率 PNG-in-ICO（嵌入 PE 序号 1 资源，并供 MSI / Burn Setup 安装器使用）
+- `platform/macos/AppIcon.icns`：`icns` 容器写入 `icp4`(16)、`icp5`(32)、`icp6`(64)、`ic07`(128)、`ic08`(256)、`ic09`(512)、`ic10`(1024) PNG 块（`huxerui.rules` 自动打包进 `Hxlings.app/Contents/Resources/AppIcon.icns`）
+
+校验生成的资产：
+```bash
+file resources/images/hxlings.png resources/images/tray_icon.png platform/windows/app.ico platform/macos/AppIcon.icns
+```
+
+## 2. `mcpp.toml` 与三端运行时图标契约
+
+1. **`mcpp.toml` 关键字段**：
+   - `[package.metadata.huxerui]`：`name = "Hxlings"`、`id = "io.github.farnaherry.hxlings"`、`resources = "resources"`（触发 `hrc` 编译与 `app.resources` 模块导出）。
+   - `[resources]`：`icon = "platform/windows/app.ico"`（嵌入 Windows PE 序号 1 图标）。
+   - `[targets.hxlings]`：`kind = "app"`、`main = "src/main.cpp"`、`windows_subsystem = "windows"`、`windows_entry = "main"`。
+2. **`src/platform_icon.cppm` 运行时行为**：
+   - **Linux**：`PreparePlatformStartup()` 调用 `g_set_prgname("hxlings")` 并处理混合 Wayland 会话回退；`ApplyPlatformApplicationIcon()` 在 `InstallApplication` 阶段调用 `gtk_icon_theme_add_search_path` 添加 `<resources>/huxerui/app/images` 并调用 `gtk_window_set_default_icon_name("hxlings")`。
+   - **macOS**：`ApplyPlatformApplicationIcon()` 通过 `mcpplibs::os::macos::objc` 将 `hxlings.png` 设为 `[NSApplication sharedApplication].applicationIconImage`（弥补无 bundle 直接 `mcpp run` 时的 Dock 图标）。
+   - **Windows**：`ApplyPlatformWindowIcon()` 在窗口创建后动态查找当前线程顶层窗口，从 PE 序号 1 通过 `LoadImageW` 读取大小图标并发送 `WM_SETICON`（解决 HuxerUI 默认 `WNDCLASSEXW` 未设置 `hIcon`/`hIconSm` 的问题）。
+
+## 3. 多平台打包、CI 检查与安全释放原则
+
+1. **打包产物矩阵**（`mcpp pack hxlings --release --pkg-format <fmt>`）：
+   - Linux：`tar`、`deb`、`rpm`、`appimage`
+   - Windows：`zip`、`msi`、`setup`（WiX Burn）
+   - macOS：`tar`、`dmg`
+2. **CI 归档检查要点（`.github/workflows/ci.yml`）**：
+   - `set -o pipefail` 下禁止 `tar -tzf ... | grep -q`（会触发 SIGPIPE 141），应先存入变量再过滤检查。
+   - Linux `tar`/`deb`、macOS `tar`、Windows `msi` 文件表必须同时包含 `huxerui/resources.bin`、`app/images/hxlings.png`、`app/images/tray_icon.png`。
+3. **本地打包烟测与发布**：
+   ```bash
+   mcpp pack hxlings --release --pkg-format tar --output /tmp/hxlings-check.tar.gz
+   tar -tzf /tmp/hxlings-check.tar.gz | grep -E 'resources\.bin|app/images/(hxlings|tray_icon)\.png'
+   rm -f /tmp/hxlings-check.tar.gz
+   ```
+   - `.github/workflows/release.yml` 由 `v*` Tag 触发并校验全部 9 个平台产物 + 生成 `SHA256SUMS.txt`；切勿强制改写既有已发布 Tag。

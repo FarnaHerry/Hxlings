@@ -364,8 +364,17 @@ void TestProcessStreamingAndCancel() {
 void TestAppSettingsSerializationAndPersistence() {
     {
         const AppSettings def = ParseAppSettingsJson("{}");
-        Check(!def.dark_mode && def.brand_preset_index == 0 && def.tray_enabled && def.close_to_tray,
+        Check(def.theme_mode == ThemeMode::Auto && def.brand_preset_index == 0 &&
+                  def.tray_enabled && def.close_to_tray && !def.lightweight_mode,
               "ParseAppSettingsJson uses expected defaults on empty object");
+    }
+    {
+        const AppSettings migrated_dark = ParseAppSettingsJson("{\"dark_mode\": true}");
+        Check(migrated_dark.theme_mode == ThemeMode::Dark,
+              "ParseAppSettingsJson migrates legacy dark_mode=true to ThemeMode::Dark");
+        const AppSettings migrated_light = ParseAppSettingsJson("{\"dark_mode\": false}");
+        Check(migrated_light.theme_mode == ThemeMode::Light,
+              "ParseAppSettingsJson migrates legacy dark_mode=false to ThemeMode::Light");
     }
     {
         const AppSettings invalid = ParseAppSettingsJson("not json");
@@ -377,10 +386,11 @@ void TestAppSettingsSerializationAndPersistence() {
     }
     {
         const AppSettings expected{
-            .dark_mode = true,
+            .theme_mode = ThemeMode::Dark,
             .brand_preset_index = 4,
             .tray_enabled = false,
             .close_to_tray = false,
+            .lightweight_mode = true,
         };
         const std::string encoded = SerializeAppSettingsJson(expected);
         const AppSettings decoded = ParseAppSettingsJson(encoded);

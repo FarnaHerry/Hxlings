@@ -16,6 +16,7 @@ export namespace hxlings {
 View StorePage() {
     const auto store = UseService<XlingsStore>();
     const TaskScope tasks = UseApplicationTaskScope();
+    const TaskScope ui_tasks = UseTaskScope();
     const ToastHandle toast = UseToast();
     const ThemeSpec& theme = UseTheme();
     const StatusPalette sp = ResolveStatusPalette(theme);
@@ -40,9 +41,9 @@ View StorePage() {
         }
     }, store->active_nav.Get());
 
-    Lifecycle([store, tasks, search_handle] {
-        if (store->focus_search_nonce.Get() > 0 && store->active_nav.Get() == 2) {
-            tasks.Post([search_handle] {
+    Lifecycle([store, ui_tasks, search_handle] {
+        if (store->active_nav.Get() == 2 && store->ConsumeFocusSearchNonce()) {
+            ui_tasks.Post([search_handle] {
                 (void)search_handle.RequestFocus(true);
             });
         }

@@ -577,6 +577,7 @@ View BatchUpdateDialogContent(
 View PackagesPage() {
     const auto store = UseService<XlingsStore>();
     const TaskScope tasks = UseApplicationTaskScope();
+    const TaskScope ui_tasks = UseTaskScope();
     const ToastHandle toast = UseToast();
     const DialogHandle dialog = UseDialog();
     const ThemeSpec& theme = UseTheme();
@@ -587,9 +588,9 @@ View PackagesPage() {
     auto checked_targets = UseState(std::vector<std::string>{});
     const ViewHandle filter_handle = UseViewHandle();
 
-    Lifecycle([store, tasks, filter_handle] {
-        if (store->focus_search_nonce.Get() > 0 && store->active_nav.Get() == 1) {
-            tasks.Post([filter_handle] {
+    Lifecycle([store, ui_tasks, filter_handle] {
+        if (store->active_nav.Get() == 1 && store->ConsumeFocusSearchNonce()) {
+            ui_tasks.Post([filter_handle] {
                 (void)filter_handle.RequestFocus(true);
             });
         }
@@ -601,9 +602,9 @@ View PackagesPage() {
         }
     }, store->active_nav.Get(), store->installed_groups.Get().size());
 
-    Lifecycle([store, tasks, dialog, toast] {
-        if (store->open_batch_update_nonce.Get() > 0) {
-            tasks.Post([store, tasks, dialog, toast] {
+    Lifecycle([store, tasks, ui_tasks, dialog, toast] {
+        if (store->ConsumeBatchUpdateNonce()) {
+            ui_tasks.Post([store, tasks, dialog, toast] {
                 if (!store->has_scanned_updates.Get() && !store->scanning_updates.Get() && !store->skip_initial_refresh) {
                     store->ScanUpdatablePackages(tasks);
                 }
@@ -614,9 +615,9 @@ View PackagesPage() {
         }
     }, store->open_batch_update_nonce.Get());
 
-    Lifecycle([store, tasks, dialog, toast] {
-        if (store->open_batch_cleanup_nonce.Get() > 0) {
-            tasks.Post([store, tasks, dialog, toast] {
+    Lifecycle([store, tasks, ui_tasks, dialog, toast] {
+        if (store->ConsumeBatchCleanupNonce()) {
+            ui_tasks.Post([store, tasks, dialog, toast] {
                 if (!store->has_scanned_expired.Get() && !store->scanning_expired.Get() && !store->skip_initial_refresh) {
                     store->ScanExpiredVersions(tasks);
                 }

@@ -4,6 +4,7 @@ import std;
 import huxerui;
 import hxlings.theme;
 import hxlings.icons;
+import hxlings.shortcuts;
 
 using namespace huxerui;
 
@@ -386,6 +387,83 @@ View DialogCardShell(std::string title, View body, View actions, float width = 4
         Shadow{Color::Rgb(0, 0, 0, 0.28F), {}, 24.0F, 0.0F},
         CrossAlign(CrossAxisAlignment::Stretch)
     );
+}
+
+[[huxerui::composable]]
+View ShortcutsDialogContent(DialogContext ctx) {
+    const ThemeSpec& theme = UseTheme();
+    const StatusPalette sp = ResolveStatusPalette(theme);
+    const auto catalog = AppShortcutCatalog();
+
+    std::vector<View> rows;
+    rows.reserve(catalog.size() + 4);
+    std::string last_group;
+    for (std::size_t i = 0; i < catalog.size(); ++i) {
+        const auto& item = catalog[i];
+        if (item.group != last_group) {
+            last_group = item.group;
+            rows.push_back(
+                Text(item.group, TextRole::Label)
+                    .Style(TextStyle{
+                        .font = Font::System(12.0F).WithWeight(FontWeight::SemiBold),
+                        .foreground = theme.colors.primary,
+                    })
+                    .With(Padding(EdgeInsets{.top = rows.empty() ? 0.0F : 6.0F}))
+                    .Key("sc-grp-" + std::to_string(i))
+            );
+        }
+        rows.push_back(
+            Row {
+                Text(item.description, TextRole::Body)
+                    .Style(TextStyle{
+                        .font = Font::System(13.0F),
+                        .foreground = theme.colors.on_surface,
+                    })
+                    .With(Grow(1.0F)),
+                Row {
+                    Text(item.keys, TextRole::Label)
+                        .Style(TextStyle{
+                            .font = Font::Monospace(12.0F).WithWeight(FontWeight::SemiBold),
+                            .foreground = theme.colors.on_surface,
+                        }),
+                }.With(
+                    Padding(EdgeInsets::Symmetric(8.0F, 3.0F)),
+                    Background(sp.muted_bg),
+                    Border{sp.border_soft, 1.0F},
+                    CornerRadius(6.0F)
+                ),
+            }.With(
+                Padding(EdgeInsets::Symmetric(8.0F, 5.0F)),
+                Spacing(10.0F),
+                Background(sp.card_elevated_bg),
+                CornerRadius(8.0F),
+                CrossAlign(CrossAxisAlignment::Center)
+            ).Key("sc-row-" + std::to_string(i))
+        );
+    }
+
+    View body = Column {
+        Text(
+            kIsMacOs ? "当前运行于 macOS（主修饰键为 ⌘ Command）"
+                     : "当前主修饰键为 Ctrl（macOS 自动映射为 ⌘ Command）",
+            TextRole::Label
+        ).Style(TextStyle{
+            .font = Font::System(12.0F),
+            .foreground = theme.colors.on_surface_variant,
+        }),
+        ScrollView(
+            Column(std::move(rows))
+                .With(Spacing(6.0F), CrossAlign(CrossAxisAlignment::Stretch))
+        ).ScrollAxis(Axis::Vertical)
+            .With(Frame{.max_height = 320.0F}, ScrollBar{}),
+    }.With(Spacing(10.0F), CrossAlign(CrossAxisAlignment::Stretch));
+
+    View actions = Row {
+        Spacer{}.With(Grow(1.0F)),
+        ActionButton("关闭", ButtonTone::Primary, [ctx] { ctx.Dismiss(); }),
+    }.With(CrossAlign(CrossAxisAlignment::Center));
+
+    return DialogCardShell("快捷键一览", std::move(body), std::move(actions), 540.0F).Key("shortcuts-dialog");
 }
 
 } // namespace hxlings

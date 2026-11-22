@@ -6,11 +6,33 @@ import nlohmann.json;
 
 export namespace hxlings {
 
+enum class ThemeMode {
+    Auto,
+    Light,
+    Dark,
+};
+
+inline std::string_view ThemeModeToString(ThemeMode mode) noexcept {
+    switch (mode) {
+        case ThemeMode::Auto: return "auto";
+        case ThemeMode::Light: return "light";
+        case ThemeMode::Dark: return "dark";
+    }
+    return "auto";
+}
+
+inline ThemeMode ParseThemeMode(std::string_view text) noexcept {
+    if (text == "light") return ThemeMode::Light;
+    if (text == "dark") return ThemeMode::Dark;
+    return ThemeMode::Auto;
+}
+
 struct AppSettings {
-    bool dark_mode = false;
+    ThemeMode theme_mode = ThemeMode::Auto;
     int brand_preset_index = 0;
     bool tray_enabled = true;
     bool close_to_tray = true;
+    bool lightweight_mode = false;
 
     bool operator==(const AppSettings&) const = default;
 };
@@ -32,8 +54,10 @@ inline AppSettings ParseAppSettingsJson(std::string_view text) {
     if (!parsed.is_object()) {
         return out;
     }
-    if (parsed.contains("dark_mode") && parsed["dark_mode"].is_boolean()) {
-        out.dark_mode = parsed["dark_mode"].get<bool>();
+    if (parsed.contains("theme_mode") && parsed["theme_mode"].is_string()) {
+        out.theme_mode = ParseThemeMode(parsed["theme_mode"].get<std::string>());
+    } else if (parsed.contains("dark_mode") && parsed["dark_mode"].is_boolean()) {
+        out.theme_mode = parsed["dark_mode"].get<bool>() ? ThemeMode::Dark : ThemeMode::Light;
     }
     if (parsed.contains("brand_preset_index") && parsed["brand_preset_index"].is_number_integer()) {
         out.brand_preset_index = std::max(0, parsed["brand_preset_index"].get<int>());
@@ -44,15 +68,19 @@ inline AppSettings ParseAppSettingsJson(std::string_view text) {
     if (parsed.contains("close_to_tray") && parsed["close_to_tray"].is_boolean()) {
         out.close_to_tray = parsed["close_to_tray"].get<bool>();
     }
+    if (parsed.contains("lightweight_mode") && parsed["lightweight_mode"].is_boolean()) {
+        out.lightweight_mode = parsed["lightweight_mode"].get<bool>();
+    }
     return out;
 }
 
 inline std::string SerializeAppSettingsJson(const AppSettings& settings) {
     nlohmann::json obj;
-    obj["dark_mode"] = settings.dark_mode;
+    obj["theme_mode"] = std::string(ThemeModeToString(settings.theme_mode));
     obj["brand_preset_index"] = std::max(0, settings.brand_preset_index);
     obj["tray_enabled"] = settings.tray_enabled;
     obj["close_to_tray"] = settings.close_to_tray;
+    obj["lightweight_mode"] = settings.lightweight_mode;
     return obj.dump(2) + "\n";
 }
 

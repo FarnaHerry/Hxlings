@@ -1041,6 +1041,50 @@ void AuditAllPagesAtViewport(
     ui.Pump();
     AuditCurrentScreen(ctx, ui, w, h, "Settings[App]", "page-settings");
 
+    if (!ui.Find(UiSelector::Key("settings-lightweight-switch")).Exists()) {
+        ctx.Flag(vp_tag + " / Settings[App]", "Missing settings-lightweight-switch");
+    }
+    if (!ui.Find(UiSelector::Key("settings-about-card")).Exists()) {
+        ctx.Flag(vp_tag + " / Settings[App]", "Missing settings-about-card");
+    }
+    if (SafeTap(ctx, vp_tag + " / ThemeDark", ui.Find(UiSelector::Key("theme-mode-dark")), "theme-mode-dark")) {
+        ui.Pump(550ms);
+        ui.Pump();
+        if (store->theme_mode.Get() != ThemeMode::Dark) {
+            ctx.Flag(vp_tag + " / ThemeDark", "Clicking theme-mode-dark did not activate ThemeMode::Dark");
+        }
+    }
+    if (SafeTap(ctx, vp_tag + " / ThemeLight", ui.Find(UiSelector::Key("theme-mode-light")), "theme-mode-light")) {
+        ui.Pump(550ms);
+        ui.Pump();
+        if (store->theme_mode.Get() != ThemeMode::Light) {
+            ctx.Flag(vp_tag + " / ThemeLight", "Clicking theme-mode-light did not activate ThemeMode::Light");
+        }
+    }
+    if (SafeTap(ctx, vp_tag + " / ThemeAuto", ui.Find(UiSelector::Key("theme-mode-auto")), "theme-mode-auto")) {
+        ui.Pump(550ms);
+        ui.Pump();
+        if (store->theme_mode.Get() != ThemeMode::Auto) {
+            ctx.Flag(vp_tag + " / ThemeAuto", "Clicking theme-mode-auto did not activate ThemeMode::Auto");
+        }
+    }
+    if (SafeTap(ctx, vp_tag + " / SettingsShortcuts", ui.Find(UiSelector::Key("settings-open-shortcuts")), "settings-open-shortcuts")) {
+        ui.Pump(500ms);
+        ui.Pump();
+        if (!ui.Find(UiSelector::Key("shortcuts-dialog")).Exists()) {
+            ctx.Flag(vp_tag + " / SettingsShortcuts", "Clicking settings-open-shortcuts did not open shortcuts-dialog");
+        } else {
+            AuditCurrentScreen(ctx, ui, w, h, "Settings[ShortcutsDialog]", "page-settings", false, true);
+            ui.PressKey(Key::Escape);
+            try {
+                ui.PumpUntil([&] { return !ui.Find(UiSelector::Key("shortcuts-dialog")).Exists(); },
+                             {.timeout = 2s, .step = 50ms});
+            } catch (const UiTestFailure& ex) {
+                ctx.Flag(vp_tag + " / SettingsShortcuts", std::string("Escape did not close shortcuts-dialog: ") + ex.what());
+            }
+        }
+    }
+
     if (SafeTap(ctx, vp_tag + " / Settings[XlingsConfig]", ui.Find(UiSelector::Text("xlings 全局配置")), "xlings 全局配置")) {
         ui.Pump();
         AuditCurrentScreen(ctx, ui, w, h, "Settings[XlingsConfig]", "page-settings");
@@ -1200,11 +1244,13 @@ void TestCrossPlatformShortcuts(AuditContext& ctx, UiTest& ui, const std::shared
     }
 
     ui.PressKey(Key::D, PrimaryShiftModifier());
+    ui.Pump(300ms);
     ui.Pump();
     if (!store->dark_mode.Get()) {
         ctx.Flag("Shortcuts", "Primary+Shift+D did not enable dark mode");
     }
     ui.PressKey(Key::D, PrimaryShiftModifier());
+    ui.Pump(300ms);
     ui.Pump();
     if (store->dark_mode.Get()) {
         ctx.Flag("Shortcuts", "Second Primary+Shift+D did not restore light mode");

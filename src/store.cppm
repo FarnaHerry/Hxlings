@@ -57,6 +57,7 @@ public:
     bool skip_initial_refresh = false;
 
     // Client Preferences (decoupled from xlings CLI global config)
+    State<ThemeMode> theme_mode{ThemeMode::Auto};
     State<bool> dark_mode{false};
     State<Color> brand_color{DefaultBrandColor()};
     State<AppSettings> app_settings{AppSettings{}};
@@ -65,7 +66,10 @@ public:
     State<bool> console_expanded{false};
     bool force_quit_requested = false;
     bool tray_activate_registered = false;
+    bool initial_refresh_started = false;
     std::optional<WindowHandle> main_window;
+    std::optional<ToastHandle> active_toast;
+    std::function<void()> on_tray_state_changed;
 
     // Environment & Dashboard
     State<XlingsVersionInfo> version_info{XlingsVersionInfo{}};
@@ -163,6 +167,48 @@ public:
         console_lines = std::vector<std::string>{};
     }
 
+    void NotifyTrayStateChanged() const {
+        if (!skip_initial_refresh && on_tray_state_changed) {
+            on_tray_state_changed();
+        }
+    }
+
+    void ShowToastSafe(std::string message, std::optional<ToastHandle> fallback = std::nullopt) const {
+        if (message.empty()) return;
+        if (main_window.has_value() && !main_window->IsOpen()) {
+            return;
+        }
+        const auto target = active_toast.has_value() ? active_toast : fallback;
+        if (!target.has_value()) {
+            return;
+        }
+        try {
+            target->Show(std::move(message));
+        } catch (...) {
+        }
+    }
+
+    bool ConsumeFocusSearchNonce() {
+        const std::uint64_t val = focus_search_nonce.Get();
+        if (val <= consumed_focus_search_nonce_) return false;
+        consumed_focus_search_nonce_ = val;
+        return true;
+    }
+
+    bool ConsumeBatchUpdateNonce() {
+        const std::uint64_t val = open_batch_update_nonce.Get();
+        if (val <= consumed_batch_update_nonce_) return false;
+        consumed_batch_update_nonce_ = val;
+        return true;
+    }
+
+    bool ConsumeBatchCleanupNonce() {
+        const std::uint64_t val = open_batch_cleanup_nonce.Get();
+        if (val <= consumed_batch_cleanup_nonce_) return false;
+        consumed_batch_cleanup_nonce_ = val;
+        return true;
+    }
+
     void CancelCurrentOperation() {
         if (active_process_) {
             active_process_->Cancel();
@@ -179,17 +225,31 @@ public:
         const int max_idx = static_cast<int>(presets.size()) - 1;
         next.brand_preset_index = std::clamp(next.brand_preset_index, 0, max_idx);
         app_settings = next;
-        dark_mode = next.dark_mode;
+        theme_mode = next.theme_mode;
+        if (next.theme_mode == ThemeMode::Dark) {
+            dark_mode = true;
+        } else if (next.theme_mode == ThemeMode::Light) {
+            dark_mode = false;
+        }
         brand_color = presets[static_cast<std::size_t>(next.brand_preset_index)];
         if (persist && !skip_initial_refresh) {
             (void)SaveAppSettings(next);
         }
+        NotifyTrayStateChanged();
+    }
+
+    void SetThemeMode(ThemeMode mode) {
+        AppSettings next = app_settings.Get();
+        next.theme_mode = mode;
+        ApplyAppSettings(std::move(next), true);
     }
 
     void SetDarkMode(bool enabled) {
-        AppSettings next = app_settings.Get();
-        next.dark_mode = enabled;
-        ApplyAppSettings(std::move(next), true);
+        SetThemeMode(enabled ? ThemeMode::Dark : ThemeMode::Light);
+    }
+
+    void ToggleEffectiveDark(bool current_effective_dark) {
+        SetThemeMode(current_effective_dark ? ThemeMode::Light : ThemeMode::Dark);
     }
 
     void SetBrandPresetIndex(int index) {
@@ -207,6 +267,18 @@ public:
     void SetCloseToTray(bool enabled) {
         AppSettings next = app_settings.Get();
         next.close_to_tray = enabled;
+        if (!enabled) {
+            next.lightweight_mode = false;
+        }
+        ApplyAppSettings(std::move(next), true);
+    }
+
+    void SetLightweightMode(bool enabled) {
+        AppSettings next = app_settings.Get();
+        next.lightweight_mode = enabled;
+        if (enabled && next.tray_enabled) {
+            next.close_to_tray = true;
+        }
         ApplyAppSettings(std::move(next), true);
     }
 
@@ -238,6 +310,7 @@ public:
                 self->version_info = std::move(snap.version_info);
                 self->env = std::move(snap.env);
                 self->initial_loaded = true;
+                self->NotifyTrayStateChanged();
             }
             finish_one();
         });
@@ -479,6 +552,7 @@ public:
     }
 
     void LoadInstalledDetail(TaskScope tasks, const PkgGroup& group) {
+        installed_detail_task_.Cancel();
         selected_installed_key = group.key;
         installed_plan_preview = std::vector<InstallPlanItem>{};
         selected_remove_plan = std::optional<RemovePlan>{};
@@ -490,7 +564,7 @@ public:
         const std::string target = group.key;
         const std::string plain_name = group.name;
 
-        tasks.Launch([self, client, target, plain_name]() -> Task<void> {
+        installed_detail_task_ = tasks.Launch([self, client, target, plain_name]() -> Task<void> {
             InstalledDetailSnapshot snap = co_await RunWorker([client, target, plain_name]() -> InstalledDetailSnapshot {
                 InstalledDetailSnapshot s;
                 s.key = target;
@@ -522,6 +596,7 @@ public:
     }
 
     void RunSearch(TaskScope tasks, std::string keyword, std::string category = {}) {
+        search_task_.Cancel();
         keyword = TrimWhitespace(keyword);
         category = TrimWhitespace(category);
         const std::uint64_t seq = ++search_seq_;
@@ -531,7 +606,7 @@ public:
 
         auto self = shared_from_this();
         const XlingsClient client = client_;
-        tasks.Launch([self, tasks, client, seq, keyword = std::move(keyword), category = std::move(category)]() -> Task<void> {
+        search_task_ = tasks.Launch([self, tasks, client, seq, keyword = std::move(keyword), category = std::move(category)]() -> Task<void> {
             auto outcome = co_await RunWorker([client, keyword, category]() {
                 return client.SearchPackagesChecked(keyword, category);
             });
@@ -556,13 +631,14 @@ public:
     }
 
     void LoadStoreDetail(TaskScope tasks, const std::string& package_target) {
+        store_detail_task_.Cancel();
         selected_store_pkg = package_target;
         store_plan_preview = std::vector<InstallPlanItem>{};
         loading_store_detail = true;
 
         auto self = shared_from_this();
         const XlingsClient client = client_;
-        tasks.Launch([self, client, package_target]() -> Task<void> {
+        store_detail_task_ = tasks.Launch([self, client, package_target]() -> Task<void> {
             PackageDetail detail = co_await RunWorker([client, package_target]() {
                 return client.QueryPackageInfo(package_target);
             });
@@ -574,9 +650,10 @@ public:
     }
 
     void PreviewInstallPlan(TaskScope tasks, std::vector<std::string> targets, bool global, bool for_store) {
+        plan_preview_task_.Cancel();
         auto self = shared_from_this();
         const XlingsClient client = client_;
-        tasks.Launch([self, client, targets = std::move(targets), global, for_store]() -> Task<void> {
+        plan_preview_task_ = tasks.Launch([self, client, targets = std::move(targets), global, for_store]() -> Task<void> {
             auto items = co_await RunWorker([client, targets, global]() {
                 return client.PlanInstall(targets, global);
             });
@@ -589,12 +666,13 @@ public:
     }
 
     void LoadSubosDetail(TaskScope tasks, const std::string& subos_name, const std::string& event_kind) {
+        subos_detail_task_.Cancel();
         selected_subos = subos_name;
         loading_subos_detail = true;
 
         auto self = shared_from_this();
         const XlingsClient client = client_;
-        tasks.Launch([self, client, subos_name, event_kind]() -> Task<void> {
+        subos_detail_task_ = tasks.Launch([self, client, subos_name, event_kind]() -> Task<void> {
             SubosDetailSnapshot snap = co_await RunWorker([client, subos_name, event_kind]() -> SubosDetailSnapshot {
                 SubosDetailSnapshot s;
                 s.name = subos_name;
@@ -644,9 +722,9 @@ public:
             self->subos_exec_output = std::move(text);
             self->running_subos_exec = false;
             if (outcome.ok) {
-                toast.Show("命令执行完成 (exit 0)");
+                self->ShowToastSafe("命令执行完成 (exit 0)", toast);
             } else {
-                toast.Show("命令退出: " + outcome.error_message);
+                self->ShowToastSafe("命令退出: " + outcome.error_message, toast);
             }
         });
     }
@@ -660,7 +738,7 @@ public:
         AfterFn after_fn
     ) {
         if (task_running.Get()) {
-            toast.Show("已有任务正在执行，请等待完成或先取消");
+            ShowToastSafe("已有任务正在执行，请等待完成或先取消", toast);
             return;
         }
 
@@ -672,56 +750,62 @@ public:
         task_last_failed = false;
         task_progress = std::optional<float>{};
         AppendConsoleLine("[开始] " + title);
+        NotifyTrayStateChanged();
 
         std::weak_ptr<XlingsStore> weak_self = shared_from_this();
         auto self = shared_from_this();
 
-        tasks.Launch([self, weak_self, tasks, toast, title = std::move(title), ctrl,
+        active_operation_task_ = tasks.Launch([self, weak_self, tasks, toast, title = std::move(title), ctrl,
                       worker_fn = std::move(worker_fn), after_fn = std::move(after_fn)]() mutable -> Task<void> {
-            const CommandOutcome outcome = co_await RunWorker([weak_self, tasks, ctrl, worker_fn = std::move(worker_fn)]() {
-                auto emit_event = [weak_self, tasks](const NdjsonEvent& ev) {
-                    std::string line;
-                    std::optional<float> pct = ev.progress_percent;
-                    if (ev.kind == "log") {
-                        line = ev.level.empty() ? ev.message : ("[" + ev.level + "] " + ev.message);
-                    } else if (ev.kind == "error") {
-                        line = "[错误] " + ev.message;
-                    } else if (ev.kind == "progress") {
-                        if (!ev.message.empty()) line = "[进度] " + ev.message;
-                    } else if (ev.kind == "data" && ev.data_kind == "tip") {
-                        if (!ev.message.empty()) line = "[提示] " + ev.message;
-                    } else if (ev.kind == "data" && ev.data_kind == "subos_exec_output") {
-                        line = ev.message;
-                    } else if (ev.kind == "data" && ev.data_kind == "remove_plan") {
-                        if (const auto p = ParseRemovePlanEvents({ev}); p.has_value()) {
-                            line = "[清理计划] " + p->name + ": 移除 " + std::to_string(p->remove.size()) +
-                                   " 个旧版本 (" + FormatBytes(p->total_bytes) + ")，保留 " +
-                                   std::to_string(p->keep.size()) + " 个";
+            const CommandOutcome outcome = co_await self->mutation_sequence_.Run(
+                [weak_self, tasks, ctrl, worker_fn = std::move(worker_fn)](std::stop_token stop) {
+                    std::stop_callback on_stop(stop, [ctrl] {
+                        if (ctrl) ctrl->Cancel();
+                    });
+                    auto emit_event = [weak_self, tasks](const NdjsonEvent& ev) {
+                        std::string line;
+                        std::optional<float> pct = ev.progress_percent;
+                        if (ev.kind == "log") {
+                            line = ev.level.empty() ? ev.message : ("[" + ev.level + "] " + ev.message);
+                        } else if (ev.kind == "error") {
+                            line = "[错误] " + ev.message;
+                        } else if (ev.kind == "progress") {
+                            if (!ev.message.empty()) line = "[进度] " + ev.message;
+                        } else if (ev.kind == "data" && ev.data_kind == "tip") {
+                            if (!ev.message.empty()) line = "[提示] " + ev.message;
+                        } else if (ev.kind == "data" && ev.data_kind == "subos_exec_output") {
+                            line = ev.message;
+                        } else if (ev.kind == "data" && ev.data_kind == "remove_plan") {
+                            if (const auto p = ParseRemovePlanEvents({ev}); p.has_value()) {
+                                line = "[清理计划] " + p->name + ": 移除 " + std::to_string(p->remove.size()) +
+                                       " 个旧版本 (" + FormatBytes(p->total_bytes) + ")，保留 " +
+                                       std::to_string(p->keep.size()) + " 个";
+                            }
+                        } else if (ev.kind == "raw") {
+                            line = ev.message;
                         }
-                    } else if (ev.kind == "raw") {
-                        line = ev.message;
-                    }
-                    if (!line.empty() || pct.has_value()) {
-                        tasks.Post([weak_self, line = std::move(line), pct]() {
+                        if (!line.empty() || pct.has_value()) {
+                            tasks.Post([weak_self, line = std::move(line), pct]() {
+                                if (auto s = weak_self.lock()) {
+                                    if (pct.has_value()) s->task_progress = pct;
+                                    if (!line.empty()) s->AppendConsoleLine(line);
+                                }
+                            });
+                        }
+                    };
+
+                    auto emit_line = [weak_self, tasks](const std::string& raw_line) {
+                        if (raw_line.empty()) return;
+                        tasks.Post([weak_self, raw_line]() {
                             if (auto s = weak_self.lock()) {
-                                if (pct.has_value()) s->task_progress = pct;
-                                if (!line.empty()) s->AppendConsoleLine(line);
+                                s->AppendConsoleLine(raw_line);
                             }
                         });
-                    }
-                };
+                    };
 
-                auto emit_line = [weak_self, tasks](const std::string& raw_line) {
-                    if (raw_line.empty()) return;
-                    tasks.Post([weak_self, raw_line]() {
-                        if (auto s = weak_self.lock()) {
-                            s->AppendConsoleLine(raw_line);
-                        }
-                    });
-                };
-
-                return worker_fn(emit_event, emit_line, ctrl);
-            });
+                    return worker_fn(emit_event, emit_line, ctrl);
+                }
+            );
 
             self->active_process_.reset();
             self->task_running = false;
@@ -731,13 +815,14 @@ public:
                 self->task_last_failed = false;
                 self->task_last_status = "完成: " + title;
                 self->AppendConsoleLine("[完成] " + title);
-                toast.Show("完成: " + title);
+                self->ShowToastSafe("完成: " + title, toast);
             } else {
                 self->task_last_failed = true;
                 self->task_last_status = "失败: " + title + " — " + outcome.error_message;
                 self->AppendConsoleLine("[失败] " + outcome.error_message);
-                toast.Show("失败: " + outcome.error_message);
+                self->ShowToastSafe("失败: " + outcome.error_message, toast);
             }
+            self->NotifyTrayStateChanged();
 
             after_fn(self, tasks, outcome);
         });
@@ -802,12 +887,13 @@ public:
 
     void PreviewSingleRemoveOlderThan(TaskScope tasks, std::string pkg_key, std::string older_than) {
         if (pkg_key.empty() || older_than.empty()) return;
+        remove_plan_task_.Cancel();
         loading_remove_plan = true;
         selected_remove_plan = std::optional<RemovePlan>{};
 
         auto self = shared_from_this();
         const XlingsClient client = client_;
-        tasks.Launch([self, client, pkg_key = std::move(pkg_key), older_than = std::move(older_than)]() -> Task<void> {
+        remove_plan_task_ = tasks.Launch([self, client, pkg_key = std::move(pkg_key), older_than = std::move(older_than)]() -> Task<void> {
             auto plan = co_await RunWorker([client, pkg_key, older_than]() {
                 return client.PlanRemoveOlderThan(pkg_key, older_than);
             });
@@ -1505,8 +1591,19 @@ private:
 
     XlingsClient client_;
     std::shared_ptr<ActiveProcessControl> active_process_;
+    WorkerSequence mutation_sequence_;
+    TaskHandle search_task_;
+    TaskHandle installed_detail_task_;
+    TaskHandle store_detail_task_;
+    TaskHandle plan_preview_task_;
+    TaskHandle remove_plan_task_;
+    TaskHandle subos_detail_task_;
+    TaskHandle active_operation_task_;
     std::atomic<std::uint64_t> search_seq_{0};
     std::atomic<std::uint64_t> core_refresh_seq_{0};
+    std::uint64_t consumed_focus_search_nonce_ = 0;
+    std::uint64_t consumed_batch_update_nonce_ = 0;
+    std::uint64_t consumed_batch_cleanup_nonce_ = 0;
     std::string loaded_subos_detail_name_;
 };
 

@@ -115,6 +115,18 @@ VectorAsset SettingsIcon() {
     });
 }
 
+VectorAsset AutoThemeIcon() {
+    return VectorAsset::Create({24.0F, 24.0F}, [](VectorBuilder& b) {
+        const auto w = Color::White();
+        b.StrokePath(Path::RoundedRect({3.0F, 3.0F, 18.0F, 18.0F}, CornerRadii{9.0F}), w, detail::RoundStroke(2.0F));
+        Path half;
+        half.MoveTo({12.0F, 5.0F})
+            .ArcTo({7.0F, 7.0F}, 0.0F, ArcSize::Small, ArcDirection::Clockwise, {12.0F, 19.0F})
+            .Close();
+        b.FillPath(half, w);
+    });
+}
+
 VectorAsset SunIcon() {
     return VectorAsset::Create({24.0F, 24.0F}, [](VectorBuilder& b) {
         const auto w = Color::White();
@@ -135,15 +147,11 @@ VectorAsset SunIcon() {
 VectorAsset MoonIcon() {
     return VectorAsset::Create({24.0F, 24.0F}, [](VectorBuilder& b) {
         Path p;
-        p.MoveTo({20.0F, 12.0F})
-            .ArcTo({8.0F, 8.0F}, 0.0F, ArcSize::Large, ArcDirection::Clockwise, {4.0F, 12.0F})
-            .ArcTo({8.0F, 8.0F}, 0.0F, ArcSize::Large, ArcDirection::Clockwise, {20.0F, 12.0F})
+        p.MoveTo({12.0F, 3.8F})
+            .ArcTo({8.2F, 8.2F}, 0.0F, ArcSize::Large, ArcDirection::CounterClockwise, {20.2F, 12.0F})
+            .ArcTo({6.5F, 6.5F}, 0.0F, ArcSize::Small, ArcDirection::Clockwise, {12.0F, 3.8F})
             .Close();
-        p.MoveTo({17.5F, 9.5F})
-            .ArcTo({6.5F, 6.5F}, 0.0F, ArcSize::Large, ArcDirection::Clockwise, {4.5F, 9.5F})
-            .ArcTo({6.5F, 6.5F}, 0.0F, ArcSize::Large, ArcDirection::Clockwise, {17.5F, 9.5F})
-            .Close();
-        b.FillPath(p, Color::White(), PathFillRule::EvenOdd);
+        b.FillPath(p, Color::White());
     });
 }
 
@@ -152,11 +160,11 @@ VectorAsset RefreshIcon() {
         const auto w = Color::White();
         const auto st = detail::RoundStroke(2.0F);
         Path arc;
-        arc.MoveTo({19.5F, 12.0F})
-            .ArcTo({7.5F, 7.5F}, 0.0F, ArcSize::Large, ArcDirection::Clockwise, {6.5F, 6.8F});
+        arc.MoveTo({19.0F, 12.0F})
+            .ArcTo({7.0F, 7.0F}, 0.0F, ArcSize::Large, ArcDirection::Clockwise, {17.0F, 7.1F});
         b.StrokePath(arc, w, st);
         Path arrow;
-        arrow.MoveTo({15.0F, 4.5F}).LineTo({19.5F, 5.2F}).LineTo({18.5F, 9.5F});
+        arrow.MoveTo({17.5F, 3.8F}).LineTo({17.0F, 7.1F}).LineTo({13.7F, 6.8F});
         b.StrokePath(arrow, w, st);
     });
 }

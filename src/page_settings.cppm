@@ -3,9 +3,11 @@ export module hxlings.page.settings;
 import std;
 import mcpplibs.os;
 import huxerui;
+import app.resources;
 import xlings.types;
 import hxlings.theme;
 import hxlings.icons;
+import hxlings.shortcuts;
 import hxlings.settings;
 import hxlings.store;
 import hxlings.components;
@@ -29,21 +31,29 @@ export namespace hxlings {
 View SettingsPage() {
     const auto store = UseService<XlingsStore>();
     const TaskScope tasks = UseApplicationTaskScope();
+    const TaskScope ui_tasks = UseTaskScope();
     const ToastHandle toast = UseToast();
     const DialogHandle dialog = UseDialog();
     const ThemeSpec& theme = UseTheme();
     const StatusPalette sp = ResolveStatusPalette(theme);
+    const SceneTransitionHandle transition = UseSceneTransition();
+    const ThemeBrightness system_brightness = UseSystemThemeBrightness();
     const ApplicationHandle app = UseApplication();
     const auto clipboard = app.Clipboard();
     const SystemTrayHandle tray = app.SystemTray();
     const bool tray_available = tray.IsAvailable();
 
+    struct ThemeAnimationFlag {
+        bool animating = false;
+    };
+    auto theme_animating = UseState(std::make_shared<ThemeAnimationFlag>());
     auto commit_reason = UseState(TextEditingValue::FromText(""));
 
     const std::size_t tab = store->settings_tab.Get();
     const AppSettings app_cfg = store->app_settings.Get();
     const auto& cfg = store->config.Get();
     const auto& env = store->env.Get();
+    const auto& ver = store->version_info.Get();
     const auto& profiles = store->profiles.Get();
     const bool loading_cfg = store->loading_xlings_config.Get();
     const bool loading_prof = store->loading_profiles.Get();
@@ -370,24 +380,112 @@ View SettingsPage() {
         );
     }
 
+    const auto resolve_brightness = [system_brightness](ThemeMode mode) noexcept {
+        if (mode == ThemeMode::Auto) return system_brightness;
+        return mode == ThemeMode::Dark ? ThemeBrightness::Dark : ThemeBrightness::Light;
+    };
+    const auto apply_theme = [store, transition, ui_tasks, theme_animating,
+                              resolve_brightness, current_brightness = theme.brightness,
+                              motion = theme.motion](ThemeMode target_mode) {
+        if (theme_animating.Get()->animating || store->theme_mode.Get() == target_mode) {
+            return;
+        }
+        const ThemeBrightness target_brightness = resolve_brightness(target_mode);
+        auto mutation = [store, target_mode] {
+            store->SetThemeMode(target_mode);
+        };
+        if (current_brightness == target_brightness || motion.reduced_motion) {
+            mutation();
+            return;
+        }
+        theme_animating.Get()->animating = true;
+        ui_tasks.Launch([theme_animating, duration = motion.slow + motion.fast]() -> Task<void> {
+            co_await Delay(std::chrono::duration<double>{duration});
+            theme_animating.Get()->animating = false;
+        });
+        const TransitionSpec reveal{
+            CircularRevealTransition{},
+            TweenSpec{.duration = motion.slow, .easing = Easing::EaseInOut},
+        };
+        transition.RunFromCurrentInteraction(reveal, std::move(mutation));
+    };
+
+    const auto make_theme_icon = [&](ThemeMode target_mode, ImageVariant icon, std::string tooltip, std::string key) {
+        const bool active = app_cfg.theme_mode == target_mode;
+        const bool dark = theme.brightness == ThemeBrightness::Dark;
+        const Color hover = dark ? Color::Rgb(255, 255, 255, 0.08F) : Color::Rgb(15, 23, 42, 0.06F);
+        const Color press = dark ? Color::Rgb(255, 255, 255, 0.14F) : Color::Rgb(15, 23, 42, 0.11F);
+        const Color fg = active ? theme.colors.primary : theme.colors.on_surface_variant;
+        return Row {
+            Image(std::move(icon))
+                .Fit(ImageFit::Contain)
+                .Align(HorizontalAlignment::Center, VerticalAlignment::Center)
+                .Tint(fg)
+                .With(Frame{.width = 16.0F, .height = 16.0F}),
+        }.With(
+            Padding(EdgeInsets::Symmetric(10.0F, 7.0F)),
+            Background(active ? theme.colors.primary_container : Color::Transparent()),
+            Border{active ? WithAlpha(theme.colors.primary, 0.35F) : Color::Transparent(), 1.0F},
+            CornerRadius(8.0F),
+            Indication{
+                .hover = IndicationLayer{.fill = hover},
+                .press = IndicationLayer{.fill = press},
+            },
+            Tooltip(tooltip),
+            Focusable(true),
+            PointerCursor(PointerCursorKind::Hand),
+            Semantics{.role = SemanticRole::Button, .label = tooltip, .selected = active}
+        ).OnClick([apply_theme, target_mode] { apply_theme(target_mode); })
+         .Key(std::move(key));
+    };
+
     View appearance_card = Card(
         Column {
-            SectionHeader("Hxlings 界面外观", "调整客户端深浅色主题与强调色，立即生效并保存到本地"),
+            SectionHeader("Hxlings 界面外观", "调整客户端主题、强调色与快捷键设置，实时生效并保存到本地"),
             Row {
                 Column {
-                    Text("深色模式", TextRole::Body)
+                    Text("主题", TextRole::Body)
                         .Style(TextStyle{.font = Font::System(14.0F), .foreground = theme.colors.on_surface}),
-                    Text("切换客户端明暗配色（不影响 xlings CLI）", TextRole::Label)
+                    Text("自动跟随系统，或固定浅色 / 深色外观（不影响 xlings CLI）", TextRole::Label)
                         .Style(TextStyle{.font = Font::System(12.0F), .foreground = theme.colors.on_surface_variant}),
                 }.With(Spacing(2.0F), Grow(1.0F)),
-                Switch("开启", app_cfg.dark_mode)
-                    .OnChanged([store](bool dark) { store->SetDarkMode(dark); }),
+                Row {
+                    make_theme_icon(ThemeMode::Auto, app::images::theme_auto, "自动", "theme-mode-auto"),
+                    make_theme_icon(ThemeMode::Light, app::images::sun, "浅色", "theme-mode-light"),
+                    make_theme_icon(ThemeMode::Dark, app::images::moon, "深色", "theme-mode-dark"),
+                }.With(
+                    Padding(3.0F),
+                    Spacing(4.0F),
+                    Background(sp.muted_bg),
+                    Border{sp.border_soft, 1.0F},
+                    CornerRadius(10.0F),
+                    CrossAlign(CrossAxisAlignment::Center)
+                ),
             }.With(Spacing(12.0F), CrossAlign(CrossAxisAlignment::Center)),
             Row {
                 Text("主题强调色", TextRole::Body)
                     .Style(TextStyle{.font = Font::System(14.0F), .foreground = theme.colors.on_surface})
                     .With(Grow(1.0F)),
                 Row(std::move(swatches)).With(Spacing(10.0F), CrossAlign(CrossAxisAlignment::Center)),
+            }.With(Spacing(12.0F), CrossAlign(CrossAxisAlignment::Center)),
+            Divider(),
+            Row {
+                Column {
+                    Text("快捷键", TextRole::Body)
+                        .Style(TextStyle{.font = Font::System(14.0F), .foreground = theme.colors.on_surface}),
+                    Text("查看全局页面导航、搜索聚焦与批量操作快捷键 (" + FormatShortcut("/") + ")", TextRole::Label)
+                        .Style(TextStyle{.font = Font::System(12.0F), .foreground = theme.colors.on_surface_variant}),
+                }.With(Spacing(2.0F), Grow(1.0F)),
+                ActionButton(
+                    "查看快捷键",
+                    ButtonTone::Secondary,
+                    [dialog] {
+                        dialog.Show([](DialogContext ctx) { return ShortcutsDialogContent(ctx); });
+                    },
+                    true,
+                    icons::KeyboardIcon(),
+                    true
+                ).Key("settings-open-shortcuts"),
             }.With(Spacing(12.0F), CrossAlign(CrossAxisAlignment::Center)),
         }.With(Spacing(14.0F), CrossAlign(CrossAxisAlignment::Stretch))
     );
@@ -417,12 +515,24 @@ View SettingsPage() {
                 Column {
                     Text("关闭窗口时最小化到托盘", TextRole::Body)
                         .Style(TextStyle{.font = Font::System(14.0F), .foreground = theme.colors.on_surface}),
-                    Text("仅当托盘可用时隐藏窗口；使用托盘退出或 macOS ⌘Q 可彻底结束进程", TextRole::Label)
+                    Text("仅当托盘可用时停留后台；使用托盘退出或 macOS ⌘Q 可彻底结束进程", TextRole::Label)
                         .Style(TextStyle{.font = Font::System(12.0F), .foreground = theme.colors.on_surface_variant}),
                 }.With(Spacing(2.0F), Grow(1.0F)),
-                Switch("驻留", app_cfg.close_to_tray)
+                Switch("驻留", app_cfg.close_to_tray || (app_cfg.lightweight_mode && app_cfg.tray_enabled))
                     .With(Enabled(app_cfg.tray_enabled))
                     .OnChanged([store](bool enabled) { store->SetCloseToTray(enabled); }),
+            }.With(Spacing(12.0F), CrossAlign(CrossAxisAlignment::Center)),
+            Row {
+                Column {
+                    Text("轻量级模式", TextRole::Body)
+                        .Style(TextStyle{.font = Font::System(14.0F), .foreground = theme.colors.on_surface}),
+                    Text("最小化到托盘时销毁 UI 窗口与渲染资源，仅保留后台托盘服务（依赖托盘开启）", TextRole::Label)
+                        .Style(TextStyle{.font = Font::System(12.0F), .foreground = theme.colors.on_surface_variant}),
+                }.With(Spacing(2.0F), Grow(1.0F)),
+                Switch("轻量", app_cfg.lightweight_mode && app_cfg.tray_enabled)
+                    .With(Enabled(app_cfg.tray_enabled))
+                    .OnChanged([store](bool enabled) { store->SetLightweightMode(enabled); })
+                    .Key("settings-lightweight-switch"),
             }.With(Spacing(12.0F), CrossAlign(CrossAxisAlignment::Center)),
         }.With(Spacing(14.0F), CrossAlign(CrossAxisAlignment::Stretch))
     );
@@ -434,6 +544,40 @@ View SettingsPage() {
             KeyValueRow("本地配置文件", settings_path, true, true),
         }.With(Spacing(10.0F), CrossAlign(CrossAxisAlignment::Stretch))
     );
+
+    const std::string cli_version_text =
+        ver.version.empty()
+            ? std::string("xlings CLI")
+            : ("xlings " + ver.version +
+               (ver.protocol_version.empty() ? std::string{} : (" (Protocol " + ver.protocol_version + ")")));
+    View about_card = Card(
+        Column {
+            SectionHeader("关于", "应用版本、运行时引擎与开源协议信息"),
+            Row {
+                Image(app::images::hxlings)
+                    .Fit(ImageFit::Contain)
+                    .With(Frame{.width = 36.0F, .height = 36.0F}, CornerRadius(8.0F)),
+                Column {
+                    Row {
+                        Text("Hxlings", TextRole::Title)
+                            .Style(TextStyle{.font = Font::System(15.5F).WithWeight(FontWeight::Bold),
+                                             .foreground = theme.colors.on_surface}),
+                        StatusBadge("v0.1.1", theme.colors.primary, theme.colors.primary_container),
+                    }.With(Spacing(8.0F), CrossAlign(CrossAxisAlignment::Center)),
+                    Text("基于 C++23 Modules、mcpp 与 HuxerUI 构建的跨平台 xlings 桌面管理器", TextRole::Label)
+                        .Style(TextStyle{.font = Font::System(12.0F),
+                                         .foreground = theme.colors.on_surface_variant}),
+                }.With(Spacing(3.0F), Grow(1.0F)),
+            }.With(Spacing(12.0F), CrossAlign(CrossAxisAlignment::Center)),
+            Divider(),
+            KeyValueRow("应用版本", "Hxlings v0.1.1 · HuxerUI", false, true),
+            KeyValueRow("xlings CLI", cli_version_text, false, true),
+            KeyValueRow("开源协议", "MIT License", false, false),
+            KeyValueRow("Hxlings 仓库", "https://github.com/FarnaHerry/Hxlings", true, true),
+            KeyValueRow("HuxerUI 官方", "https://github.com/HuxerUI/HuxerUI", true, true),
+            KeyValueRow("xlings 官方", "https://github.com/openxlings/xlings", true, true),
+        }.With(Spacing(12.0F), CrossAlign(CrossAxisAlignment::Stretch))
+    ).Key("settings-about-card");
 
     View tab_bar = Row {
         SegmentedButton({"Hxlings 应用设置", "xlings 全局配置", "环境诊断与维护"}, tab)
@@ -452,6 +596,7 @@ View SettingsPage() {
             std::move(appearance_card),
             std::move(tray_card),
             std::move(storage_card),
+            std::move(about_card),
         }.With(Padding(22.0F), Spacing(16.0F), CrossAlign(CrossAxisAlignment::Stretch)).Key("settings-tab-0");
     } else if (tab == 1) {
         body_content = Column {

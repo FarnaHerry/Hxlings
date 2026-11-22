@@ -118,6 +118,7 @@ View NewSubosDialogContent(
 View SubosPage() {
     const auto store = UseService<XlingsStore>();
     const TaskScope tasks = UseApplicationTaskScope();
+    const TaskScope ui_tasks = UseTaskScope();
     const ToastHandle toast = UseToast();
     const DialogHandle dialog = UseDialog();
     const ThemeSpec& theme = UseTheme();
@@ -131,9 +132,9 @@ View SubosPage() {
     auto event_kind = UseState(std::string{});
     const ViewHandle shim_filter_handle = UseViewHandle();
 
-    Lifecycle([store, tasks, shim_filter_handle] {
-        if (store->focus_search_nonce.Get() > 0 && store->active_nav.Get() == 3) {
-            tasks.Post([shim_filter_handle] {
+    Lifecycle([store, ui_tasks, shim_filter_handle] {
+        if (store->active_nav.Get() == 3 && store->ConsumeFocusSearchNonce()) {
+            ui_tasks.Post([shim_filter_handle] {
                 (void)shim_filter_handle.RequestFocus(true);
             });
         }
