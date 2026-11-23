@@ -400,6 +400,85 @@ inline bool IsValidWin32Handle(void* handle) {
     return handle != nullptr && handle != reinterpret_cast<void*>(static_cast<std::intptr_t>(-1));
 }
 
+struct Win32EnvGuard {
+    using FreeFn = int (*)(char16_t*);
+    char16_t* ptr = nullptr;
+    FreeFn free_fn = nullptr;
+
+    Win32EnvGuard(char16_t* p, FreeFn fn) noexcept : ptr(p), free_fn(fn) {}
+
+    ~Win32EnvGuard() {
+        if (ptr != nullptr && free_fn != nullptr) {
+            free_fn(ptr);
+        }
+    }
+
+    Win32EnvGuard(const Win32EnvGuard&) = delete;
+    Win32EnvGuard& operator=(const Win32EnvGuard&) = delete;
+};
+
+class Win32HandleGuard {
+public:
+    using CloseFn = int (*)(void*);
+
+    Win32HandleGuard(void* handle, CloseFn close_fn) noexcept
+        : handle_(handle), close_fn_(close_fn) {}
+
+    Win32HandleGuard(Win32HandleGuard&& other) noexcept
+        : handle_(std::exchange(other.handle_, nullptr)), close_fn_(other.close_fn_) {}
+
+    Win32HandleGuard& operator=(Win32HandleGuard&& other) noexcept {
+        if (this != &other) {
+            Reset();
+            handle_ = std::exchange(other.handle_, nullptr);
+            close_fn_ = other.close_fn_;
+        }
+        return *this;
+    }
+
+    Win32HandleGuard(const Win32HandleGuard&) = delete;
+    Win32HandleGuard& operator=(const Win32HandleGuard&) = delete;
+
+    ~Win32HandleGuard() {
+        Reset();
+    }
+
+    void Reset(void* next = nullptr) noexcept {
+        if (IsValidWin32Handle(handle_) && close_fn_ != nullptr) {
+            close_fn_(handle_);
+        }
+        handle_ = next;
+    }
+
+    [[nodiscard]] void* Get() const noexcept {
+        return handle_;
+    }
+
+    [[nodiscard]] bool Valid() const noexcept {
+        return IsValidWin32Handle(handle_);
+    }
+
+private:
+    void* handle_ = nullptr;
+    CloseFn close_fn_ = nullptr;
+};
+
+struct PidResetGuard {
+    std::shared_ptr<ActiveProcessControl> control;
+
+    explicit PidResetGuard(std::shared_ptr<ActiveProcessControl> ctrl) noexcept
+        : control(std::move(ctrl)) {}
+
+    ~PidResetGuard() {
+        if (control) {
+            control->pid.store(-1, std::memory_order_release);
+        }
+    }
+
+    PidResetGuard(const PidResetGuard&) = delete;
+    PidResetGuard& operator=(const PidResetGuard&) = delete;
+};
+
 template <bool Enabled>
 ProcessResult RunWindowsProcessStreamingImpl(
     const std::vector<std::string>& args,
@@ -497,14 +576,13 @@ ProcessResult RunWindowsProcessStreamingImpl(
 
         if (!env_overrides.empty() && get_env_w != nullptr && free_env_w != nullptr) {
             std::vector<std::string> inherited;
-            if (char16_t* raw_env = get_env_w(); raw_env != nullptr) {
-                for (const char16_t* cur = raw_env; *cur != u'\0'; ) {
+            if (Win32EnvGuard raw_env{get_env_w(), free_env_w}; raw_env.ptr != nullptr) {
+                for (const char16_t* cur = raw_env.ptr; *cur != u'\0'; ) {
                     std::size_t entry_len = 0;
                     while (cur[entry_len] != u'\0') ++entry_len;
                     inherited.push_back(u16_to_utf8(cur, entry_len));
                     cur += entry_len + 1;
                 }
-                free_env_w(raw_env);
             }
             const auto merged = hxlings::MergeWindowsEnvEntries(std::move(inherited), env_overrides);
             for (const std::string& entry : merged) {
@@ -520,10 +598,7 @@ ProcessResult RunWindowsProcessStreamingImpl(
             creation_flags |= kCreateUnicodeEnv;
         }
 
-        void* pipe_read = nullptr;
-        void* pipe_write = nullptr;
-        void* err_write = nullptr;
-        void* nul_in = nullptr;
+        Win32HandleGuard pipe_read{nullptr, close_handle};
         Win32ProcessInformation pi{};
         std::uint32_t spawn_err = 0;
         int created = 0;
@@ -536,27 +611,36 @@ ProcessResult RunWindowsProcessStreamingImpl(
             sa_inherit.length = sizeof(Win32SecurityAttributes);
             sa_inherit.inherit_handle = 1;
 
-            if (create_pipe(&pipe_read, &pipe_write, &sa_inherit, 0) == 0) {
+            void* raw_read = nullptr;
+            void* raw_write = nullptr;
+            if (create_pipe(&raw_read, &raw_write, &sa_inherit, 0) == 0) {
                 result.error_message = "CreatePipe failed for '" + args[0] + "' (win32=" +
                                        std::to_string(get_last_error()) + ")";
                 return result;
             }
-            set_handle_info(pipe_read, kHandleFlagInherit, 0);
+            pipe_read.Reset(raw_read);
+            Win32HandleGuard pipe_write{raw_write, close_handle};
+            set_handle_info(pipe_read.Get(), kHandleFlagInherit, 0);
 
             void* self_proc = get_current_process();
-            if (duplicate_handle(self_proc, pipe_write, self_proc, &err_write, 0, 1, kDuplicateSameAccess) == 0) {
-                err_write = nullptr;
+            void* raw_err = nullptr;
+            if (duplicate_handle(self_proc, pipe_write.Get(), self_proc, &raw_err, 0, 1, kDuplicateSameAccess) == 0) {
+                raw_err = nullptr;
             }
+            Win32HandleGuard err_write{raw_err, close_handle};
 
-            nul_in = create_file_w(u"NUL", kGenericRead, kFileShareReadWrite, &sa_inherit, kOpenExisting, kFileAttrNormal, nullptr);
+            Win32HandleGuard nul_in{
+                create_file_w(u"NUL", kGenericRead, kFileShareReadWrite, &sa_inherit, kOpenExisting, kFileAttrNormal, nullptr),
+                close_handle
+            };
 
             Win32StartupInfoW startup{};
             startup.cb = sizeof(Win32StartupInfoW);
             startup.flags = kStartfStdHandles | kStartfShowWindow;
             startup.show_window = kSwHide;
-            startup.std_input = IsValidWin32Handle(nul_in) ? nul_in : nullptr;
-            startup.std_output = pipe_write;
-            startup.std_error = IsValidWin32Handle(err_write) ? err_write : pipe_write;
+            startup.std_input = nul_in.Valid() ? nul_in.Get() : nullptr;
+            startup.std_output = pipe_write.Get();
+            startup.std_error = err_write.Valid() ? err_write.Get() : pipe_write.Get();
 
             created = create_process_w(
                 nullptr,
@@ -573,38 +657,36 @@ ProcessResult RunWindowsProcessStreamingImpl(
             if (created == 0) {
                 spawn_err = get_last_error();
             }
-
-            if (IsValidWin32Handle(nul_in)) close_handle(nul_in);
-            if (IsValidWin32Handle(err_write)) close_handle(err_write);
-            if (IsValidWin32Handle(pipe_write)) close_handle(pipe_write);
         }
 
         if (created == 0) {
-            if (IsValidWin32Handle(pipe_read)) close_handle(pipe_read);
             result.error_message = "spawn failed for '" + args[0] + "' (win32=" + std::to_string(spawn_err) + ")";
             return result;
         }
 
-        void* job = nullptr;
+        Win32HandleGuard proc_handle{pi.process_handle, close_handle};
+        Win32HandleGuard thread_handle{pi.thread_handle, close_handle};
+        Win32HandleGuard job{nullptr, close_handle};
+
         if (create_job_w != nullptr && set_job_info != nullptr && assign_job != nullptr) {
-            job = create_job_w(nullptr, nullptr);
-            if (IsValidWin32Handle(job)) {
+            job.Reset(create_job_w(nullptr, nullptr));
+            if (job.Valid()) {
                 Win32JobExtendedLimit ext{};
                 ext.basic.limit_flags = kJobLimitKillOnClose;
-                set_job_info(job, kJobObjectExtLimitInfo, &ext, sizeof(ext));
-                if (assign_job(job, pi.process_handle) == 0) {
-                    close_handle(job);
-                    job = nullptr;
+                set_job_info(job.Get(), kJobObjectExtLimitInfo, &ext, sizeof(ext));
+                if (assign_job(job.Get(), proc_handle.Get()) == 0) {
+                    job.Reset();
                 }
             } else {
-                job = nullptr;
+                job.Reset();
             }
         }
 
-        resume_thread(pi.thread_handle);
+        resume_thread(thread_handle.Get());
         if (control) {
             control->pid.store(static_cast<std::int64_t>(pi.process_id), std::memory_order_release);
         }
+        PidResetGuard pid_guard{control};
 
         std::string pending;
         bool terminated = false;
@@ -626,10 +708,10 @@ ProcessResult RunWindowsProcessStreamingImpl(
             result.cancelled = true;
             if (!terminated) {
                 terminated = true;
-                if (IsValidWin32Handle(job) && terminate_job != nullptr) {
-                    terminate_job(job, 1u);
+                if (job.Valid() && terminate_job != nullptr) {
+                    terminate_job(job.Get(), 1u);
                 }
-                terminate_proc(pi.process_handle, 1u);
+                terminate_proc(proc_handle.Get(), 1u);
             }
         };
 
@@ -639,23 +721,23 @@ ProcessResult RunWindowsProcessStreamingImpl(
         while (true) {
             check_cancel();
             std::uint32_t avail = 0;
-            if (peek_named_pipe(pipe_read, nullptr, 0, nullptr, &avail, nullptr) == 0) {
+            if (peek_named_pipe(pipe_read.Get(), nullptr, 0, nullptr, &avail, nullptr) == 0) {
                 break;
             }
             if (avail > 0) {
                 const std::uint32_t to_read = avail < sizeof(buf) ? avail : static_cast<std::uint32_t>(sizeof(buf));
                 std::uint32_t bytes_read = 0;
-                if (read_file(pipe_read, buf, to_read, &bytes_read, nullptr) == 0 || bytes_read == 0) {
+                if (read_file(pipe_read.Get(), buf, to_read, &bytes_read, nullptr) == 0 || bytes_read == 0) {
                     break;
                 }
                 emit_chunk(std::string_view(buf, bytes_read));
                 continue;
             }
-            if (wait_single(pi.process_handle, 20u) == kWaitObject0) {
-                while (peek_named_pipe(pipe_read, nullptr, 0, nullptr, &avail, nullptr) != 0 && avail > 0) {
+            if (wait_single(proc_handle.Get(), 20u) == kWaitObject0) {
+                while (peek_named_pipe(pipe_read.Get(), nullptr, 0, nullptr, &avail, nullptr) != 0 && avail > 0) {
                     const std::uint32_t to_read = avail < sizeof(buf) ? avail : static_cast<std::uint32_t>(sizeof(buf));
                     std::uint32_t bytes_read = 0;
-                    if (read_file(pipe_read, buf, to_read, &bytes_read, nullptr) == 0 || bytes_read == 0) {
+                    if (read_file(pipe_read.Get(), buf, to_read, &bytes_read, nullptr) == 0 || bytes_read == 0) {
                         break;
                     }
                     emit_chunk(std::string_view(buf, bytes_read));
@@ -669,25 +751,17 @@ ProcessResult RunWindowsProcessStreamingImpl(
             if (!pending.empty() && on_line) on_line(pending);
         }
 
-        while (wait_single(pi.process_handle, 50u) != kWaitObject0) {
+        while (wait_single(proc_handle.Get(), 50u) != kWaitObject0) {
             check_cancel();
         }
 
         std::uint32_t exit_code = 1;
-        if (get_exit_code(pi.process_handle, &exit_code) != 0) {
+        if (get_exit_code(proc_handle.Get(), &exit_code) != 0) {
             result.exit_code = static_cast<int>(exit_code);
         }
 
-        if (IsValidWin32Handle(pipe_read)) close_handle(pipe_read);
-        if (IsValidWin32Handle(pi.thread_handle)) close_handle(pi.thread_handle);
-        if (IsValidWin32Handle(pi.process_handle)) close_handle(pi.process_handle);
-        if (IsValidWin32Handle(job)) close_handle(job);
-
         if (result.cancelled && result.error_message.empty()) {
             result.error_message = "Operation cancelled";
-        }
-        if (control) {
-            control->pid.store(-1, std::memory_order_release);
         }
     }
     return result;
@@ -791,6 +865,7 @@ ProcessResult RunProcessStreaming(
     if (control) {
         control->pid.store(static_cast<std::int64_t>(proc.id()), std::memory_order_release);
     }
+    detail::PidResetGuard pid_guard{control};
 
     std::string pending;
     bool term_sent = false;
@@ -878,9 +953,6 @@ ProcessResult RunProcessStreaming(
 
     if (result.cancelled && result.error_message.empty()) {
         result.error_message = "Operation cancelled";
-    }
-    if (control) {
-        control->pid.store(-1, std::memory_order_release);
     }
     return result;
 }

@@ -363,6 +363,26 @@ void TestProcessStreamingAndCancel() {
           "RunProcessStreaming respects pre-cancelled ActiveProcessControl");
 }
 
+void TestProcessStreamingExceptionSafety() {
+    const std::string bin = ResolveXlingsBinary();
+    auto ctrl = std::make_shared<ActiveProcessControl>();
+    bool caught = false;
+    try {
+        (void)RunProcessStreaming(
+            {bin, "interface", "--version"},
+            [](const std::string&) {
+                throw std::runtime_error("simulated callback exception");
+            },
+            ctrl
+        );
+    } catch (const std::runtime_error&) {
+        caught = true;
+    }
+    Check(caught, "RunProcessStreaming propagates callback exception cleanly");
+    Check(ctrl->pid.load(std::memory_order_acquire) == -1,
+          "PidResetGuard resets active pid to -1 even on callback exception");
+}
+
 void TestAppSettingsSerializationAndPersistence() {
     {
         const AppSettings def = ParseAppSettingsJson("{}");
@@ -727,6 +747,7 @@ int main() {
     TestParsePayloadStatusAndUpdatablePlans();
     TestWhitespaceAndSearchNormalization();
     TestProcessStreamingAndCancel();
+    TestProcessStreamingExceptionSafety();
     TestAppSettingsSerializationAndPersistence();
     TestBundledResourcesAndChildEnvSanitization();
     TestWindowsProcessHelpersAndSpawn();
