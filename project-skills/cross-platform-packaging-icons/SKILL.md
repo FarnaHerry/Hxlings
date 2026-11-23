@@ -46,7 +46,8 @@ file resources/images/hxlings.png resources/images/tray_icon.png platform/window
    - macOS：`tar`、`dmg`（无需 `--mode`）
 2. **CI 归档检查要点（`.github/workflows/ci.yml`）**：
    - `set -o pipefail` 下禁止 `tar -tzf ... | grep -q`（会触发 SIGPIPE 141），应先存入变量再过滤检查。
-   - Linux `tar`/`deb`、macOS `tar`、Windows `msi` 文件表必须同时包含 `huxerui/resources.bin`、`app/images/hxlings.png`、`app/images/tray_icon.png`。
+   - Linux `tar`/`deb`、macOS `tar`/`dmg`、Windows `msi` 文件表必须同时包含 `huxerui/resources.bin`、`app/images/hxlings.png`、`app/images/tray_icon.png`。
+   - macOS CI 门禁：使用 `ruby -c Casks/hxlings.rb` 校验 Cask 语法；对 `.tar.gz` 内 `bin/hxlings` 执行 `codesign --verify --strict`；只读挂载 `.dmg` 验证 `Hxlings.app`、`Applications` 软链、`Info.plist`、`AppIcon.icns`、`resources.bin` 与 `codesign --verify --deep --strict`。
    - Windows `.msi` 与 `-setup.exe` 门禁：校验 `.msi >= 2MB`、`Media.Cabinet` 以 `#` 开头、快捷方式与 `ARPPRODUCTICON` 齐全，并将孤立 `.msi` 拷入空目录执行 `msiexec /a` 验证可解出 `hxlings.exe` + 运行时 DLL + `resources.bin`；对 `-setup.exe` 执行 `wix burn extract <bundle> -out ... -outba ...` 验证内置 `hxlings-installer.exe`、`mbanative.dll`、CRT DLL 与安装器资源且不含 `WixStandardBootstrapperApplication`。
    - Linux `.deb`/`.rpm` 原生依赖门禁：校验不打包 `libc.so.6`/`libgtk-4.so.1`、声明了发行版依赖，且在 `ubuntu-24.04` 实装 `.deb` 并确认 `readelf -V` 无 `GLIBC_2.39+`、`/usr/bin/ldd` 全部正常解析。
    - Linux 自包含 `.tar.gz`/`.AppImage` 门禁：校验 `lib/ld-linux-x86-64.so.2`、`lib/libc.so.6`、`lib/libm.so.6`、`lib/gconv/`、`MCPP_BUNDLE_DIR` 与 `/usr/lib/x86_64-linux-gnu:/usr/lib64` 均存在，且随附链接器 `--list` 全量解析无 `not found`。
@@ -56,4 +57,4 @@ file resources/images/hxlings.png resources/images/tray_icon.png platform/window
    tar -tzf /tmp/hxlings-check.tar.gz | grep -E 'resources\.bin|app/images/(hxlings|tray_icon)\.png|ld-linux-x86-64\.so\.2'
    rm -f /tmp/hxlings-check.tar.gz
    ```
-   - `.github/workflows/release.yml` 由 `v*` Tag 触发并校验全部 9 个平台产物 + 生成 `SHA256SUMS.txt`；切勿强制改写既有已发布 Tag。
+   - `.github/workflows/release.yml` 由 `v*` Tag 触发并校验全部 9 个平台产物 + 生成 `SHA256SUMS.txt`，并自动附加 macOS Ad-hoc Gatekeeper 放行说明（发版升级版本号时同步更新 `Casks/hxlings.rb` 的 `version` 与 `sha256`）；切勿强制改写既有已发布 Tag。

@@ -289,6 +289,8 @@ jobs:
             python3 -c 'import sys, json; print(json.load(sys.stdin)["data"]["artifacts"][0]["path"])'
           }
 
+          ruby -c Casks/hxlings.rb
+
           mkdir -p dist
 
           tar_out="dist/hxlings-${pkg_version}-macos-arm64.tar.gz"
@@ -300,11 +302,42 @@ jobs:
           printf '%s\n' "$tar_list" | grep -q 'huxerui/app/images/tray_icon\.png'
           printf '%s\n' "$tar_list" | grep -q 'dropdown_indicator\.huxv'
 
+          tar_check_dir="$RUNNER_TEMP/hxlings-macos-tar-check"
+          rm -rf "$tar_check_dir" && mkdir -p "$tar_check_dir"
+          tar -xzf "$tar_out" -C "$tar_check_dir"
+          tar_bin=$(find "$tar_check_dir" -type f -path '*/bin/hxlings' | head -n 1)
+          test -x "$tar_bin"
+          codesign --verify --strict --verbose=2 "$tar_bin"
+          rm -rf "$tar_check_dir"
+
           dmg_src=$(mcpp pack hxlings --release --pkg-format dmg --message-format json | extract_pack_path)
           test -s "$dmg_src"
           dmg_out="dist/hxlings-${pkg_version}-macos-arm64.dmg"
           cp "$dmg_src" "$dmg_out"
           hdiutil verify "$dmg_out"
+
+          dmg_mount="$RUNNER_TEMP/hxlings-dmg-mount"
+          cleanup_dmg_mount() {
+            if [ -d "$dmg_mount" ]; then
+              hdiutil detach "$dmg_mount" -quiet || hdiutil detach "$dmg_mount" -force -quiet || true
+              rmdir "$dmg_mount" 2>/dev/null || rm -rf "$dmg_mount"
+            fi
+          }
+          trap cleanup_dmg_mount EXIT
+          cleanup_dmg_mount
+          mkdir -p "$dmg_mount"
+          hdiutil attach -nobrowse -readonly -mountpoint "$dmg_mount" "$dmg_out" >/dev/null
+          test -d "$dmg_mount/Hxlings.app"
+          test -L "$dmg_mount/Applications"
+          test -x "$dmg_mount/Hxlings.app/Contents/MacOS/hxlings"
+          test -s "$dmg_mount/Hxlings.app/Contents/Info.plist"
+          test -s "$dmg_mount/Hxlings.app/Contents/Resources/AppIcon.icns"
+          test -s "$dmg_mount/Hxlings.app/Contents/Resources/HuxerUI/huxerui/resources.bin" || \
+            test -s "$dmg_mount/Hxlings.app/Contents/Resources/hxlings.resources/huxerui/resources.bin"
+          codesign --verify --deep --strict --verbose=2 "$dmg_mount/Hxlings.app"
+          codesign -dvv "$dmg_mount/Hxlings.app" 2>&1
+          cleanup_dmg_mount
+          trap - EXIT
 
           ls -lh dist
 

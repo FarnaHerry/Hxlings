@@ -62,6 +62,26 @@ mcpp pack hxlings --release --pkg-format dmg        # macOS DMG 磁盘镜像
 - **macOS (`arm64`)**：`.tar.gz` 便携归档、`.dmg`（含 `Hxlings.app`、[AppIcon.icns](platform/macos/AppIcon.icns) 与 `/Applications` 快捷方式）
 - **校验文件**：随 Release 一并发布 `SHA256SUMS.txt`
 
+### macOS 安装与首次打开说明
+
+当前 macOS 安装包采用 Ad-hoc 签名（暂未使用 Apple Developer ID 证书签发与公证），首次从网络下载运行时可能触发 macOS Gatekeeper 拦截，可按以下任一方式安装并放行：
+
+1. **DMG 安装**：下载 `.dmg` 并将 `Hxlings.app` 拖入 `/Applications` 后，若无法直接打开，在终端执行一次：
+   ```bash
+   xattr -dr com.apple.quarantine /Applications/Hxlings.app
+   ```
+   （也可前往「系统设置 → 隐私与安全性」点击“仍要打开”。）
+2. **`.tar.gz` 便携包**：解压后对解压目录清除隔离属性：
+   ```bash
+   xattr -dr com.apple.quarantine ./hxlings-*-macos-arm64
+   ```
+3. **Homebrew Cask 安装**（仓库内置 [Casks/hxlings.rb](Casks/hxlings.rb)；由于 Homebrew 5.0 起已移除 `--no-quarantine` 参数，安装后需手动执行一次放行命令）：
+   ```bash
+   brew tap farnaherry/hxlings https://github.com/FarnaHerry/Hxlings
+   brew install --cask farnaherry/hxlings/hxlings
+   xattr -dr com.apple.quarantine /Applications/Hxlings.app
+   ```
+
 ## 说明
 
 - 当前基于 `mcpp 2026.11.21.1` 构建，并通过 Git 依赖接入官方 `HuxerUI/HuxerUI`（`main` 分支，0.5.0，已合入完整的新版 `mcpp` 构建契约与内建资源/插件打包支持）。

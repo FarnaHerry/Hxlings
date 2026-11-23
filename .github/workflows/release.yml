@@ -73,10 +73,32 @@ jobs:
         run: |
           set -euo pipefail
           notes="docs/releases/$GITHUB_REF_NAME.md"
+          macos_note=$(printf '%s\n' \
+            "" \
+            "## macOS Installation & Gatekeeper Notice" \
+            "" \
+            'The macOS builds are currently ad-hoc signed (`codesign -s -`) without an Apple Developer ID notarization ticket. If macOS Gatekeeper blocks the app on first launch:' \
+            "" \
+            '- After dragging `Hxlings.app` from `.dmg` to `/Applications`:' \
+            '  ```bash' \
+            '  xattr -dr com.apple.quarantine /Applications/Hxlings.app' \
+            '  ```' \
+            '- Or install via Homebrew Cask and clear quarantine once:' \
+            '  ```bash' \
+            '  brew tap farnaherry/hxlings https://github.com/FarnaHerry/Hxlings' \
+            '  brew install --cask farnaherry/hxlings/hxlings' \
+            '  xattr -dr com.apple.quarantine /Applications/Hxlings.app' \
+            '  ```')
+
           if [ -f "$notes" ]; then
-            note_args=(--notes-file "$notes")
+            merged_notes="$RUNNER_TEMP/release-notes.md"
+            cp "$notes" "$merged_notes"
+            if ! grep -Fq 'com.apple.quarantine' "$merged_notes"; then
+              printf '%s\n' "$macos_note" >> "$merged_notes"
+            fi
+            note_args=(--notes-file "$merged_notes")
           else
-            note_args=(--generate-notes)
+            note_args=(--generate-notes --notes "$macos_note")
           fi
 
           if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
