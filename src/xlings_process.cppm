@@ -768,7 +768,7 @@ ProcessResult RunWindowsProcessStreamingImpl(
 }
 
 template <bool Enabled>
-bool OpenExternalUrlWindowsImpl(const std::string& url) {
+bool ShellExecuteOpenWindowsImpl(const std::string& utf8_target) {
     if constexpr (Enabled) {
         const auto kernel32 = os::library::loaded("kernel32.dll");
         if (!kernel32.has_value()) return false;
@@ -803,16 +803,44 @@ bool OpenExternalUrlWindowsImpl(const std::string& url) {
         if (shell_execute_w == nullptr) return false;
 
         const std::u16string wop = u"open";
-        const std::u16string wurl = to_wide(url);
-        if (wurl.empty()) return false;
+        const std::u16string wtarget = to_wide(utf8_target);
+        if (wtarget.empty()) return false;
 
         constexpr int kSwShowNormal = 1;
-        void* ret = shell_execute_w(nullptr, wop.c_str(), wurl.c_str(), nullptr, nullptr, kSwShowNormal);
+        void* ret = shell_execute_w(nullptr, wop.c_str(), wtarget.c_str(), nullptr, nullptr, kSwShowNormal);
         return reinterpret_cast<std::intptr_t>(ret) > 32;
     } else {
-        (void)url;
+        (void)utf8_target;
         return false;
     }
+}
+
+bool SpawnDetachedPosixProcess(
+    const std::filesystem::path& program,
+    const std::vector<std::string>& args,
+    bool sanitize_env,
+    bool clear_appimage_env
+) {
+    os::process::spawn_options opts;
+    opts.program = program;
+    opts.args = args;
+    opts.in = os::process::stdio::null;
+    opts.out = os::process::stdio::null;
+    opts.err = os::process::stdio::null;
+    opts.own_unit = false;
+    opts.bound_lifetime = false;
+    if (sanitize_env) {
+        opts.env = BuildSanitizedEnvOverrides();
+    }
+    if (clear_appimage_env) {
+        for (const char* var_name : {"APPIMAGE", "APPDIR", "ARGV0", "OWD"}) {
+            opts.env.emplace_back(var_name, std::nullopt);
+        }
+    }
+    auto spawned = os::process::process::spawn(opts);
+    if (!spawned) return false;
+    spawned->detach();
+    return true;
 }
 
 } // namespace hxlings::detail
@@ -1015,11 +1043,39 @@ bool OpenExternalUrl(std::string_view raw_url) {
 
     namespace os = mcpplibs::os;
     if constexpr (os::is_windows) {
-        return detail::OpenExternalUrlWindowsImpl<os::is_windows>(url);
+        return detail::ShellExecuteOpenWindowsImpl<os::is_windows>(url);
     } else if constexpr (os::is_macos) {
+        return detail::SpawnDetachedPosixProcess(os::fs::from_utf8("/usr/bin/open"), {url}, false, false);
+    } else {
+        return detail::SpawnDetachedPosixProcess(os::fs::from_utf8("xdg-open"), {url}, true, false);
+    }
+}
+
+bool OpenLocalPath(const std::filesystem::path& path) {
+    if (path.empty()) return false;
+    namespace os = mcpplibs::os;
+    const std::string path_utf8 = os::fs::utf8(path);
+    if (path_utf8.empty()) return false;
+
+    if constexpr (os::is_windows) {
+        return detail::ShellExecuteOpenWindowsImpl<os::is_windows>(path_utf8);
+    } else if constexpr (os::is_macos) {
+        return detail::SpawnDetachedPosixProcess(os::fs::from_utf8("/usr/bin/open"), {path_utf8}, false, false);
+    } else {
+        return detail::SpawnDetachedPosixProcess(os::fs::from_utf8("xdg-open"), {path_utf8}, true, false);
+    }
+}
+
+bool LaunchDetachedExecutable(
+    const std::filesystem::path& exe_path,
+    const std::vector<std::string>& args = {}
+) {
+    if (exe_path.empty()) return false;
+    namespace os = mcpplibs::os;
+    if constexpr (os::is_windows) {
         os::process::spawn_options opts;
-        opts.program = os::fs::from_utf8("/usr/bin/open");
-        opts.args = {url};
+        opts.program = exe_path;
+        opts.args = args;
         opts.in = os::process::stdio::null;
         opts.out = os::process::stdio::null;
         opts.err = os::process::stdio::null;
@@ -1030,19 +1086,7 @@ bool OpenExternalUrl(std::string_view raw_url) {
         spawned->detach();
         return true;
     } else {
-        os::process::spawn_options opts;
-        opts.program = os::fs::from_utf8("xdg-open");
-        opts.args = {url};
-        opts.in = os::process::stdio::null;
-        opts.out = os::process::stdio::null;
-        opts.err = os::process::stdio::null;
-        opts.own_unit = false;
-        opts.bound_lifetime = false;
-        opts.env = detail::BuildSanitizedEnvOverrides();
-        auto spawned = os::process::process::spawn(opts);
-        if (!spawned) return false;
-        spawned->detach();
-        return true;
+        return detail::SpawnDetachedPosixProcess(exe_path, args, os::is_linux, os::is_linux);
     }
 }
 

@@ -5,6 +5,7 @@ import xlings.parser;
 import xlings.process;
 import hxlings.settings;
 import hxlings.platform_icon;
+import hxlings.updater;
 
 using namespace hxlings;
 
@@ -734,6 +735,87 @@ void TestTimestampParsingAndFormatting() {
     Check(embedded == ("created " + local_iso + " (ok)"), "embedded ISO UTC timestamp replaced in free text");
 }
 
+void TestAppUpdaterParsingSha256AndSelection() {
+    Check(NormalizeSemverTag(" v0.1.6 ") == "0.1.6", "NormalizeSemverTag strips v prefix and whitespace");
+    Check(IsNewerAppVersion("0.1.5", "v0.1.6"), "0.1.6 > 0.1.5");
+    Check(IsNewerAppVersion("0.1.5", "0.1.10"), "0.1.10 > 0.1.5 numeric semver");
+    Check(!IsNewerAppVersion("0.1.5", "v0.1.5"), "same version is not newer");
+    Check(!IsNewerAppVersion("0.1.5", "0.1.4"), "older version is not newer");
+
+    Check(Sha256Hex("") == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "SHA-256 empty string matches FIPS 180-4");
+    Check(Sha256Hex("abc") == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+          "SHA-256 'abc' matches FIPS 180-4");
+
+    Sha256Hasher chunked;
+    chunked.UpdateString("a");
+    chunked.UpdateString("bc");
+    Check(chunked.FinalHex() == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+          "chunked SHA-256 matches single-shot");
+
+    const std::string gh_json = R"json({
+  "tag_name": "v0.1.6",
+  "name": "Hxlings v0.1.6",
+  "published_at": "2026-11-23T01:45:00Z",
+  "html_url": "https://github.com/FarnaHerry/Hxlings/releases/tag/v0.1.6",
+  "body": "## What's New\n- Tray dark theme sync\n- Self-update support",
+  "assets": [
+    {"name": "bad-xss.exe", "browser_download_url": "javascript:alert(1)", "size": 100},
+    {"name": "hxlings-0.1.6-windows-x86_64-setup.exe", "browser_download_url": "https://github.com/FarnaHerry/Hxlings/releases/download/v0.1.6/hxlings-0.1.6-windows-x86_64-setup.exe", "size": 4655519},
+    {"name": "hxlings-0.1.6-windows-x86_64.msi", "browser_download_url": "https://github.com/FarnaHerry/Hxlings/releases/download/v0.1.6/hxlings-0.1.6-windows-x86_64.msi", "size": 2351104},
+    {"name": "hxlings-0.1.6-macos-arm64.dmg", "browser_download_url": "https://github.com/FarnaHerry/Hxlings/releases/download/v0.1.6/hxlings-0.1.6-macos-arm64.dmg", "size": 5203158},
+    {"name": "hxlings-0.1.6-macos-arm64.tar.gz", "browser_download_url": "https://github.com/FarnaHerry/Hxlings/releases/download/v0.1.6/hxlings-0.1.6-macos-arm64.tar.gz", "size": 4367917},
+    {"name": "hxlings-0.1.6-linux-x86_64.AppImage", "browser_download_url": "https://github.com/FarnaHerry/Hxlings/releases/download/v0.1.6/hxlings-0.1.6-linux-x86_64.AppImage", "size": 33405432},
+    {"name": "hxlings-0.1.6-linux-x86_64.deb", "browser_download_url": "https://github.com/FarnaHerry/Hxlings/releases/download/v0.1.6/hxlings-0.1.6-linux-x86_64.deb", "size": 4053158},
+    {"name": "hxlings-0.1.6-linux-x86_64.rpm", "browser_download_url": "https://github.com/FarnaHerry/Hxlings/releases/download/v0.1.6/hxlings-0.1.6-linux-x86_64.rpm", "size": 4177714},
+    {"name": "hxlings-0.1.6-linux-x86_64.tar.gz", "browser_download_url": "https://github.com/FarnaHerry/Hxlings/releases/download/v0.1.6/hxlings-0.1.6-linux-x86_64.tar.gz", "size": 38158186},
+    {"name": "SHA256SUMS.txt", "browser_download_url": "https://github.com/FarnaHerry/Hxlings/releases/download/v0.1.6/SHA256SUMS.txt", "size": 894}
+  ]
+})json";
+    const auto rel = ParseGitHubLatestReleaseJson(gh_json);
+    Check(rel.has_value(), "GitHub release JSON parsed");
+    Check(rel->tag_name == "v0.1.6" && rel->version == "0.1.6", "release tag/version extracted");
+    Check(rel->assets.size() == 8, "unsafe URL filtered and SHA256SUMS separated");
+    Check(!rel->checksums_url.empty(), "checksums URL extracted");
+
+    const std::string sums_txt =
+        "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855  hxlings-0.1.6-linux-x86_64.AppImage\n"
+        "BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61F20015AD *./hxlings-0.1.6-windows-x86_64-setup.exe\n";
+    Check(ParseSha256SumsText(sums_txt, "hxlings-0.1.6-linux-x86_64.AppImage") ==
+              "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "SHA256SUMS plain entry parsed lowercase");
+    Check(ParseSha256SumsText(sums_txt, "hxlings-0.1.6-windows-x86_64-setup.exe") ==
+              "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+          "SHA256SUMS *./ entry parsed lowercase");
+
+    const auto win_sel = SelectPlatformReleaseAsset(*rel, {.os_name = "windows", .arch = "x86_64"});
+    Check(win_sel.first.has_value() && win_sel.second == UpdateInstallKind::WindowsSetupExe,
+          "Windows selects setup.exe over msi/zip");
+
+    const auto mac_sel = SelectPlatformReleaseAsset(*rel, {.os_name = "macos", .arch = "arm64"});
+    Check(mac_sel.first.has_value() && mac_sel.second == UpdateInstallKind::MacOsDmg,
+          "macOS arm64 selects dmg over tar.gz");
+
+    const auto ai_sel = SelectPlatformReleaseAsset(
+        *rel, {.os_name = "linux", .arch = "x86_64", .appimage_path = "/tmp/Hxlings.AppImage", .has_dpkg = true});
+    Check(ai_sel.first.has_value() && ai_sel.second == UpdateInstallKind::LinuxAppImage,
+          "Linux AppImage runtime prefers AppImage over deb");
+
+    const auto deb_sel = SelectPlatformReleaseAsset(
+        *rel, {.os_name = "linux", .arch = "x86_64", .exe_path = "/usr/bin/hxlings", .has_dpkg = true});
+    Check(deb_sel.first.has_value() && deb_sel.second == UpdateInstallKind::LinuxDeb,
+          "Linux dpkg install selects deb");
+
+    const auto rpm_sel = SelectPlatformReleaseAsset(
+        *rel, {.os_name = "linux", .arch = "x86_64", .exe_path = "/usr/bin/hxlings", .has_rpm = true});
+    Check(rpm_sel.first.has_value() && rpm_sel.second == UpdateInstallKind::LinuxRpm,
+          "Linux rpm install selects rpm");
+
+    const auto port_sel = SelectPlatformReleaseAsset(*rel, {.os_name = "linux", .arch = "x86_64"});
+    Check(port_sel.first.has_value() && port_sel.second == UpdateInstallKind::LinuxAppImage,
+          "Linux portable fallback picks AppImage");
+}
+
 int main() {
     TestSplitPackageSpec();
     TestNdjsonAndEnv();
@@ -755,6 +837,7 @@ int main() {
     TestConfigExtensionsAndNetworkParsers();
     TestSubosGovernanceAndFormatParsers();
     TestTimestampParsingAndFormatting();
+    TestAppUpdaterParsingSha256AndSelection();
 
     if (failures == 0) {
         std::println("All parser and xlings integration tests passed.");

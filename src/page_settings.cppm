@@ -6,10 +6,12 @@ import huxerui;
 import app.resources;
 import xlings.types;
 import xlings.parser;
+import xlings.process;
 import hxlings.theme;
 import hxlings.icons;
 import hxlings.shortcuts;
 import hxlings.settings;
+import hxlings.updater;
 import hxlings.store;
 import hxlings.components;
 
@@ -494,6 +496,236 @@ View SelfHomeSetupCard(
 }
 
 [[huxerui::composable]]
+View AppUpdateSection(
+    std::shared_ptr<XlingsStore> store,
+    TaskScope tasks,
+    ToastHandle toast,
+    ApplicationHandle app,
+    std::shared_ptr<HttpClient> http
+) {
+    const ThemeSpec& theme = UseTheme();
+    const StatusPalette sp = ResolveStatusPalette(theme);
+    const AppUpdateState& upd = store->app_update_state.Get();
+
+    const bool checking = upd.phase == UpdatePhase::Checking;
+    const bool downloading = upd.phase == UpdatePhase::Downloading;
+    const bool verifying = upd.phase == UpdatePhase::Verifying;
+    const bool installing = upd.phase == UpdatePhase::Installing;
+    const bool is_busy = checking || downloading || verifying || installing;
+
+    std::string badge_text = "未检查";
+    Color badge_fg = theme.colors.on_surface_variant;
+    Color badge_bg = sp.muted_bg;
+    switch (upd.phase) {
+        case UpdatePhase::Idle:
+            break;
+        case UpdatePhase::Checking:
+            badge_text = "检查中...";
+            badge_fg = sp.info;
+            badge_bg = sp.info_bg;
+            break;
+        case UpdatePhase::UpToDate:
+            badge_text = "已是最新";
+            badge_fg = sp.success;
+            badge_bg = sp.success_bg;
+            break;
+        case UpdatePhase::Available:
+            badge_text = "发现新版本";
+            badge_fg = theme.colors.primary;
+            badge_bg = theme.colors.primary_container;
+            break;
+        case UpdatePhase::Downloading:
+            badge_text = "下载中";
+            badge_fg = sp.info;
+            badge_bg = sp.info_bg;
+            break;
+        case UpdatePhase::Verifying:
+            badge_text = "校验中...";
+            badge_fg = sp.info;
+            badge_bg = sp.info_bg;
+            break;
+        case UpdatePhase::ReadyToInstall:
+            badge_text = "待安装";
+            badge_fg = sp.success;
+            badge_bg = sp.success_bg;
+            break;
+        case UpdatePhase::Installing:
+            badge_text = "安装中...";
+            badge_fg = sp.info;
+            badge_bg = sp.info_bg;
+            break;
+        case UpdatePhase::Error:
+            badge_text = "更新失败";
+            badge_fg = sp.danger;
+            badge_bg = sp.danger_bg;
+            break;
+    }
+
+    const std::string rel_url = (upd.latest.has_value() && !upd.latest->html_url.empty())
+                                    ? upd.latest->html_url
+                                    : std::string(kAppReleasePageUrl);
+
+    std::vector<View> action_buttons;
+    action_buttons.push_back(
+        ActionButton(
+            checking ? "检查中..." : "检查更新",
+            ButtonTone::Secondary,
+            [store, tasks, toast, http] { store->CheckForAppUpdateAsync(tasks, toast, http); },
+            !is_busy,
+            icons::RefreshIcon(),
+            true
+        ).Key("about-check-update-btn")
+    );
+    if (upd.latest.has_value() && upd.phase != UpdatePhase::UpToDate &&
+        upd.selected_asset.has_value() && !is_busy && upd.phase != UpdatePhase::ReadyToInstall) {
+        action_buttons.push_back(
+            ActionButton(
+                "下载更新",
+                ButtonTone::Primary,
+                [store, tasks, toast, http] { store->DownloadAppUpdateAsync(tasks, toast, http); },
+                true,
+                icons::DownloadIcon(),
+                true
+            ).Key("about-download-update-btn")
+        );
+    }
+    if (downloading || verifying) {
+        action_buttons.push_back(
+            ActionButton(
+                "取消下载",
+                ButtonTone::Danger,
+                [store] { store->CancelAppUpdate(); },
+                true,
+                std::nullopt,
+                true
+            ).Key("about-cancel-update-btn")
+        );
+    }
+    if (upd.phase == UpdatePhase::ReadyToInstall && !upd.downloaded_file_path.empty()) {
+        action_buttons.push_back(
+            ActionButton(
+                "立即安装更新",
+                ButtonTone::Primary,
+                [store, toast, app] { store->ApplyAppUpdateAsync(toast, app); },
+                true,
+                icons::CheckIcon(),
+                true
+            ).Key("about-apply-update-btn")
+        );
+    }
+    if (!upd.downloaded_file_path.empty()) {
+        action_buttons.push_back(
+            ActionButton(
+                "打开下载目录",
+                ButtonTone::Ghost,
+                [store, toast] {
+                    if (store->skip_initial_refresh) return;
+                    if (!OpenLocalPath(ResolveUpdateDownloadDir())) {
+                        toast.Show("无法打开更新下载目录");
+                    }
+                },
+                true,
+                std::nullopt,
+                true
+            ).Key("about-open-update-dir-btn")
+        );
+    }
+    action_buttons.push_back(
+        ActionButton(
+            "查看发布页",
+            ButtonTone::Ghost,
+            [store, toast, rel_url] { store->OpenUrl(toast, rel_url); },
+            true,
+            icons::ExternalLinkIcon(),
+            true
+        ).Key("about-release-page-btn")
+    );
+
+    std::vector<View> items;
+    items.push_back(
+        Row {
+            Text("软件自更新", TextRole::Label)
+                .Style(TextStyle{.font = Font::System(13.5F).WithWeight(FontWeight::SemiBold)}),
+            StatusBadge(badge_text, badge_fg, badge_bg),
+            is_busy ? View(ProgressCircle().With(Frame{.width = 15.0F, .height = 15.0F})) : View{},
+            Spacer{}.With(Grow(1.0F)),
+            upd.checked_at.empty()
+                ? View{}
+                : Text("上次检查: " + upd.checked_at, TextRole::Label)
+                      .Style(TextStyle{.font = Font::Monospace(11.5F), .foreground = theme.colors.on_surface_variant}),
+        }.With(Spacing(8.0F), CrossAlign(CrossAxisAlignment::Center))
+    );
+    items.push_back(Flow(std::move(action_buttons)).With(Spacing(8.0F)));
+
+    if (downloading || verifying) {
+        View bar = (upd.total_bytes > 0)
+                       ? View(ProgressBar(std::clamp(
+                             static_cast<float>(upd.downloaded_bytes) / static_cast<float>(upd.total_bytes),
+                             0.0F,
+                             1.0F)))
+                       : View(ProgressBar());
+        const std::string bytes_text = upd.total_bytes > 0
+                                           ? (FormatBytes(upd.downloaded_bytes) + " / " + FormatBytes(upd.total_bytes))
+                                           : FormatBytes(upd.downloaded_bytes);
+        items.push_back(
+            Row {
+                std::move(bar).With(Grow(1.0F)),
+                Text(bytes_text, TextRole::Label)
+                    .Style(TextStyle{.font = Font::Monospace(11.5F), .foreground = theme.colors.on_surface_variant}),
+            }.With(Spacing(10.0F), CrossAlign(CrossAxisAlignment::Center))
+        );
+    }
+
+    if (upd.latest.has_value()) {
+        const auto& rel = *upd.latest;
+        const std::string pub = rel.published_at.empty()
+                                    ? std::string{}
+                                    : (" · 发布于 " + FormatLocalTimestamp(rel.published_at));
+        items.push_back(
+            Text("最新版本: " + rel.tag_name + pub, TextRole::Label)
+                .Style(TextStyle{.font = Font::System(12.5F), .foreground = theme.colors.on_surface})
+        );
+        if (upd.selected_asset.has_value()) {
+            const auto& asset = *upd.selected_asset;
+            items.push_back(
+                Row {
+                    Text(
+                        "适配安装包: " + asset.name +
+                            (asset.size_bytes > 0 ? (" (" + FormatBytes(asset.size_bytes) + ")") : ""),
+                        TextRole::Label
+                    ).Style(TextStyle{.font = Font::Monospace(11.5F), .foreground = theme.colors.on_surface_variant})
+                        .With(Grow(1.0F)),
+                    upd.sha256_verified ? StatusBadge("SHA-256 已验证", sp.success, sp.success_bg) : View{},
+                }.With(Spacing(8.0F), CrossAlign(CrossAxisAlignment::Center))
+            );
+        } else if (upd.phase == UpdatePhase::Available) {
+            items.push_back(
+                Text("未找到适配当前平台的预编译安装包，请点击“查看发布页”手动下载。", TextRole::Label)
+                    .Style(TextStyle{.foreground = sp.warning})
+            );
+        }
+        if (!rel.body.empty()) {
+            items.push_back(CodeBox(rel.body, 72.0F, 130.0F));
+        }
+    }
+
+    const std::string& msg = !upd.error_message.empty() ? upd.error_message : upd.status_message;
+    if (!msg.empty()) {
+        items.push_back(
+            Text(msg, TextRole::Label)
+                .Style(TextStyle{
+                    .font = Font::System(12.0F),
+                    .foreground = upd.phase == UpdatePhase::Error ? sp.danger : theme.colors.on_surface_variant,
+                })
+        );
+    }
+
+    return Column(std::move(items))
+        .With(Spacing(8.0F), CrossAlign(CrossAxisAlignment::Stretch))
+        .Key("settings-app-update-box");
+}
+
+[[huxerui::composable]]
 View SettingsPage() {
     const auto store = UseService<XlingsStore>();
     const TaskScope tasks = UseApplicationTaskScope();
@@ -505,6 +737,7 @@ View SettingsPage() {
     const SceneTransitionHandle transition = UseSceneTransition();
     const ThemeBrightness system_brightness = UseSystemThemeBrightness();
     const ApplicationHandle app = UseApplication();
+    const auto http = UseService<HttpClient>();
     const auto clipboard = app.Clipboard();
     const SystemTrayHandle tray = app.SystemTray();
     const bool tray_available = tray.IsAvailable();
@@ -1036,13 +1269,15 @@ View SettingsPage() {
                 }.With(Spacing(3.0F), Grow(1.0F)),
             }.With(Spacing(12.0F), CrossAlign(CrossAxisAlignment::Center)),
             Divider(),
-            KeyValueRow("应用版本", "Hxlings v0.1.5 · HuxerUI", false, true),
+            KeyValueRow("应用版本", std::string("Hxlings v") + std::string(kAppVersion) + " · HuxerUI", false, true),
             KeyValueRow("xlings CLI", cli_version_text, false, true),
             KeyValueRow("开源协议", "MIT License", false, false),
             KeyValueRow("Hxlings 仓库", "https://github.com/FarnaHerry/Hxlings", true, true, "about-link-hxlings"),
             KeyValueRow("HuxerUI 官方", "https://github.com/HuxerUI/HuxerUI", true, true, "about-link-huxerui"),
             KeyValueRow("xlings 官方", "https://github.com/openxlings/xlings", true, true, "about-link-xlings"),
             KeyValueRow("mcpp 官方", "https://github.com/mcpp-community/mcpp", true, true, "about-link-mcpp"),
+            Divider(),
+            AppUpdateSection(store, tasks, toast, app, http),
         }.With(Spacing(12.0F), CrossAlign(CrossAxisAlignment::Stretch))
     ).Key("settings-about-card");
 

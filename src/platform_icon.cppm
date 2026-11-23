@@ -270,6 +270,179 @@ void ApplyWin32WindowIconImpl() {
     }
 }
 
+struct Win32ThemeEnumContext {
+    int effective_dark = 0;
+    int (*allow_dark_window)(void*, int) = nullptr;
+    long (*dwm_set_attr)(void*, std::uint32_t, const void*, std::uint32_t) = nullptr;
+};
+
+template <bool Enabled>
+void ApplyWin32NativeThemeImpl(int theme_mode_kind, bool effective_dark) {
+    if constexpr (Enabled) {
+        using GetModuleHandleWFn = void* (*)(const wchar_t*);
+        using LoadLibraryWFn = void* (*)(const wchar_t*);
+        using GetProcAddressFn = void* (*)(void*, const char*);
+        using GetCurrentThreadIdFn = std::uint32_t (*)();
+        using EnumWindowsProcFn = int (*)(void*, std::intptr_t);
+        using EnumThreadWindowsFn = int (*)(std::uint32_t, EnumWindowsProcFn, std::intptr_t);
+        using SetPreferredAppModeFn = int (*)(int);
+        using FlushMenuThemesFn = void (*)();
+        using AllowDarkModeForWindowFn = int (*)(void*, int);
+        using DwmSetWindowAttributeFn = long (*)(void*, std::uint32_t, const void*, std::uint32_t);
+
+        const auto kernel32 = os::library::loaded("kernel32.dll");
+        const auto user32 = os::library::loaded("user32.dll");
+        if (!kernel32.has_value()) return;
+
+        const auto get_module = kernel32->function<void*(const wchar_t*)>("GetModuleHandleW");
+        const auto load_library = kernel32->function<void*(const wchar_t*)>("LoadLibraryW");
+        const auto get_proc = kernel32->function<void*(void*, const char*)>("GetProcAddress");
+        const auto get_tid = kernel32->function<std::uint32_t()>("GetCurrentThreadId");
+        (void)sizeof(GetModuleHandleWFn);
+        (void)sizeof(LoadLibraryWFn);
+        (void)sizeof(GetProcAddressFn);
+        (void)sizeof(GetCurrentThreadIdFn);
+
+        if (get_module == nullptr || get_proc == nullptr) return;
+
+        void* uxtheme = get_module(L"uxtheme.dll");
+        if (uxtheme == nullptr && load_library != nullptr) {
+            uxtheme = load_library(L"uxtheme.dll");
+        }
+
+        AllowDarkModeForWindowFn allow_dark_window = nullptr;
+        if (uxtheme != nullptr) {
+            const auto ordinal_name = [](std::uintptr_t ord) -> const char* {
+                return reinterpret_cast<const char*>(ord);
+            };
+            const auto set_preferred_mode = reinterpret_cast<SetPreferredAppModeFn>(
+                get_proc(uxtheme, ordinal_name(135)));
+            const auto flush_menu_themes = reinterpret_cast<FlushMenuThemesFn>(
+                get_proc(uxtheme, ordinal_name(136)));
+            allow_dark_window = reinterpret_cast<AllowDarkModeForWindowFn>(
+                get_proc(uxtheme, ordinal_name(133)));
+
+            if (set_preferred_mode != nullptr) {
+                // PreferredAppMode: 1=AllowDark (Auto), 2=ForceDark, 3=ForceLight
+                const int pref = (theme_mode_kind == 0) ? 1 : (theme_mode_kind == 2 ? 2 : 3);
+                set_preferred_mode(pref);
+            }
+            if (flush_menu_themes != nullptr) {
+                flush_menu_themes();
+            }
+        }
+
+        if (!user32.has_value() || get_tid == nullptr) return;
+        const auto enum_thread_windows = user32->function<int(std::uint32_t, EnumWindowsProcFn, std::intptr_t)>("EnumThreadWindows");
+        if (enum_thread_windows == nullptr) return;
+
+        void* dwmapi = get_module(L"dwmapi.dll");
+        if (dwmapi == nullptr && load_library != nullptr) {
+            dwmapi = load_library(L"dwmapi.dll");
+        }
+        DwmSetWindowAttributeFn dwm_set_attr = nullptr;
+        if (dwmapi != nullptr) {
+            dwm_set_attr = reinterpret_cast<DwmSetWindowAttributeFn>(
+                get_proc(dwmapi, "DwmSetWindowAttribute"));
+        }
+
+        Win32ThemeEnumContext ctx{
+            .effective_dark = effective_dark ? 1 : 0,
+            .allow_dark_window = allow_dark_window,
+            .dwm_set_attr = dwm_set_attr,
+        };
+        const auto enum_cb = [](void* hwnd, std::intptr_t lparam) -> int {
+            const auto* tctx = reinterpret_cast<const Win32ThemeEnumContext*>(lparam);
+            if (hwnd != nullptr && tctx != nullptr) {
+                if (tctx->allow_dark_window != nullptr) {
+                    tctx->allow_dark_window(hwnd, tctx->effective_dark);
+                }
+                if (tctx->dwm_set_attr != nullptr) {
+                    const std::uint32_t val = static_cast<std::uint32_t>(tctx->effective_dark);
+                    // DWM immersive dark attribute: 20 (Win11 / Win10 20H1+), fallback 19
+                    if (tctx->dwm_set_attr(hwnd, 20u, &val, sizeof(val)) != 0) {
+                        tctx->dwm_set_attr(hwnd, 19u, &val, sizeof(val));
+                    }
+                }
+            }
+            return 1;
+        };
+        enum_thread_windows(get_tid(), enum_cb, reinterpret_cast<std::intptr_t>(&ctx));
+    } else {
+        (void)theme_mode_kind;
+        (void)effective_dark;
+    }
+}
+
+template <bool Enabled>
+void ApplyMacOsNativeThemeImpl(int theme_mode_kind, bool effective_dark) {
+    if constexpr (Enabled) {
+        (void)effective_dark;
+        namespace objc = os::macos::objc;
+        if (!objc::available().has_value()) {
+            return;
+        }
+        (void)objc::load_framework("AppKit");
+        objc::autorelease_pool pool;
+
+        const auto ns_app_cls = objc::class_named("NSApplication");
+        if (ns_app_cls == nullptr) return;
+        const auto ns_app = objc::send<void*>(ns_app_cls, "sharedApplication");
+        if (ns_app == nullptr) return;
+
+        if (theme_mode_kind == 0) {
+            objc::send<void>(ns_app, "setAppearance:", static_cast<void*>(nullptr));
+            return;
+        }
+
+        const auto ns_appearance_cls = objc::class_named("NSAppearance");
+        if (ns_appearance_cls == nullptr) return;
+        const auto appearance_name = objc::string(
+            theme_mode_kind == 2 ? "NSAppearanceNameDarkAqua" : "NSAppearanceNameAqua");
+        if (!appearance_name) return;
+        const auto appearance = objc::send<void*>(
+            ns_appearance_cls, "appearanceNamed:", appearance_name.raw());
+        if (appearance != nullptr) {
+            objc::send<void>(ns_app, "setAppearance:", appearance);
+        }
+    } else {
+        (void)theme_mode_kind;
+        (void)effective_dark;
+    }
+}
+
+template <bool Enabled>
+void ApplyLinuxNativeThemeImpl(int theme_mode_kind, bool effective_dark) {
+    if constexpr (Enabled) {
+        using GtkSettingsGetDefaultFn = void* (*)();
+        using GObjectSetIntFn = void (*)(void*, const char*, int, void*);
+        using GtkSettingsResetFn = void (*)(void*, const char*);
+
+        const auto get_default = reinterpret_cast<GtkSettingsGetDefaultFn>(
+            os::library::process_symbol("gtk_settings_get_default"));
+        if (get_default == nullptr) return;
+        void* settings = get_default();
+        if (settings == nullptr) return;
+
+        if (theme_mode_kind == 0) {
+            const auto reset_prop = reinterpret_cast<GtkSettingsResetFn>(
+                os::library::process_symbol("gtk_settings_reset_property"));
+            if (reset_prop != nullptr) {
+                reset_prop(settings, "gtk-application-prefer-dark-theme");
+                return;
+            }
+        }
+        const auto g_obj_set = reinterpret_cast<GObjectSetIntFn>(
+            os::library::process_symbol("g_object_set"));
+        if (g_obj_set != nullptr) {
+            g_obj_set(settings, "gtk-application-prefer-dark-theme", effective_dark ? 1 : 0, nullptr);
+        }
+    } else {
+        (void)theme_mode_kind;
+        (void)effective_dark;
+    }
+}
+
 } // namespace hxlings::detail
 
 export namespace hxlings {
@@ -297,6 +470,13 @@ inline void ApplyPlatformApplicationIcon() {
 inline void ApplyPlatformWindowIcon() {
     namespace os = mcpplibs::os;
     detail::ApplyWin32WindowIconImpl<os::is_windows>();
+}
+
+inline void ApplyPlatformThemeMode(int theme_mode_kind, bool effective_dark) {
+    namespace os = mcpplibs::os;
+    detail::ApplyWin32NativeThemeImpl<os::is_windows>(theme_mode_kind, effective_dark);
+    detail::ApplyMacOsNativeThemeImpl<os::is_macos>(theme_mode_kind, effective_dark);
+    detail::ApplyLinuxNativeThemeImpl<os::is_linux>(theme_mode_kind, effective_dark);
 }
 
 } // namespace hxlings

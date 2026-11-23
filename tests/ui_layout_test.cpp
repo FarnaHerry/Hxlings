@@ -21,6 +21,7 @@ import hxlings.settings;
 import hxlings.store;
 import xlings.types;
 import xlings.parser;
+import hxlings.updater;
 
 using namespace huxerui;
 using namespace huxerui::testing;
@@ -588,6 +589,27 @@ std::shared_ptr<XlingsStore> MakeSeededStore() {
     };
     store->subos_diff_output = std::string("两个 SubOS 的包清单完全一致（无差异）。");
     store->subos_rollback_list_output = std::string("generation 1 (active)");
+    store->app_update_state = AppUpdateState{
+        .phase = UpdatePhase::Available,
+        .current_version = std::string(kAppVersion),
+        .latest = AppReleaseInfo{
+            .tag_name = "v0.1.6",
+            .version = "0.1.6",
+            .name = "Hxlings v0.1.6",
+            .published_at = "2026-11-23T01:45:00Z",
+            .html_url = "https://github.com/FarnaHerry/Hxlings/releases/tag/v0.1.6",
+            .body = "## Highlights\n- Tray popup dark/light mode sync\n- In-app self update with SHA-256 check",
+        },
+        .selected_asset = ReleaseAssetInfo{
+            .name = "hxlings-0.1.6-linux-x86_64.AppImage",
+            .download_url = "https://github.com/FarnaHerry/Hxlings/releases/download/v0.1.6/hxlings-0.1.6-linux-x86_64.AppImage",
+            .size_bytes = 33405432ULL,
+        },
+        .install_kind = UpdateInstallKind::LinuxAppImage,
+        .total_bytes = 33405432ULL,
+        .status_message = "发现新版本 v0.1.6",
+        .checked_at = "2026-11-23 09:45:00",
+    };
 
     return store;
 }
@@ -1176,6 +1198,19 @@ void AuditAllPagesAtViewport(
                 ctx.Flag(vp_tag + " / SettingsAboutMcppLink",
                          "Clicking about-link-mcpp did not record mcpp GitHub URL (got '" +
                              store->last_opened_url.Get() + "')");
+            }
+        }
+        auto upd_btn_q = scroll_q.ScrollUntil(UiSelector::Key("about-check-update-btn"));
+        ui.Pump();
+        if (!ui.Find(UiSelector::Key("settings-app-update-box")).Exists()) {
+            ctx.Flag(vp_tag + " / SettingsAboutUpdate", "Missing settings-app-update-box");
+        }
+        AuditCurrentScreen(ctx, ui, w, h, "Settings[AppAboutUpdate]", "page-settings");
+        if (SafeTap(ctx, vp_tag + " / SettingsCheckUpdate", upd_btn_q, "about-check-update-btn")) {
+            ui.Pump();
+            if (store->app_update_state.Get().status_message.empty()) {
+                ctx.Flag(vp_tag + " / SettingsCheckUpdate",
+                         "Tapping about-check-update-btn in test mode did not update status_message");
             }
         }
         scroll_q.ScrollBy({0.0F, -2000.0F});

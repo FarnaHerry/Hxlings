@@ -38,6 +38,11 @@ WindowOptions MainWindowOptions() {
 
 void InstallApplication(ApplicationContext& context) {
     auto store = std::make_shared<XlingsStore>();
+    auto sync_native_theme = [](ThemeMode mode, bool eff_dark) {
+        const int kind = (mode == ThemeMode::Auto) ? 0 : (mode == ThemeMode::Light ? 1 : 2);
+        ApplyPlatformThemeMode(kind, eff_dark);
+    };
+    store->on_theme_changed = sync_native_theme;
     store->InitAppSettings(LoadAppSettings());
     ApplyPlatformApplicationIcon();
 
@@ -229,6 +234,16 @@ View MainShell(bool effective_dark) {
             }
         }
     });
+
+    const ThemeMode cur_theme_mode = store->theme_mode.Get();
+    const int cur_theme_kind = (cur_theme_mode == ThemeMode::Auto)
+                                   ? 0
+                                   : (cur_theme_mode == ThemeMode::Light ? 1 : 2);
+    Lifecycle([store, cur_theme_kind, effective_dark] {
+        if (!store->skip_initial_refresh) {
+            ApplyPlatformThemeMode(cur_theme_kind, effective_dark);
+        }
+    }, cur_theme_kind, effective_dark);
 
     window.OnCloseRequest([store, application, window, tray] {
         if (store->force_quit_requested) return false;
