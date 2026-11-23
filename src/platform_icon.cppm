@@ -415,7 +415,7 @@ template <bool Enabled>
 void ApplyLinuxNativeThemeImpl(int theme_mode_kind, bool effective_dark) {
     if constexpr (Enabled) {
         using GtkSettingsGetDefaultFn = void* (*)();
-        using GObjectSetIntFn = void (*)(void*, const char*, int, void*);
+        using GObjectSetVarFn = void (*)(void*, const char*, ...);
         using GtkSettingsResetFn = void (*)(void*, const char*);
 
         const auto get_default = reinterpret_cast<GtkSettingsGetDefaultFn>(
@@ -432,10 +432,15 @@ void ApplyLinuxNativeThemeImpl(int theme_mode_kind, bool effective_dark) {
                 return;
             }
         }
-        const auto g_obj_set = reinterpret_cast<GObjectSetIntFn>(
+        const auto g_obj_set = reinterpret_cast<GObjectSetVarFn>(
             os::library::process_symbol("g_object_set"));
         if (g_obj_set != nullptr) {
-            g_obj_set(settings, "gtk-application-prefer-dark-theme", effective_dark ? 1 : 0, nullptr);
+            g_obj_set(
+                settings,
+                "gtk-application-prefer-dark-theme",
+                static_cast<int>(effective_dark ? 1 : 0),
+                static_cast<const char*>(nullptr)
+            );
         }
     } else {
         (void)theme_mode_kind;
