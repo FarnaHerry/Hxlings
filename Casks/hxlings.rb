@@ -1,6 +1,6 @@
 cask "hxlings" do
-  version "0.1.5"
-  sha256 "c3732bcc8a260efa4b6f1d38953d691dc9a9e3a5c499aec18f851f3d49273cf7"
+  version "0.1.6"
+  sha256 "7ec6acfd52ca75bacb645a00adaee5d65801657b8f48acca58a13f26ec9d99b5"
 
   url "https://github.com/FarnaHerry/Hxlings/releases/download/v#{version}/hxlings-#{version}-macos-arm64.dmg"
   name "Hxlings"
