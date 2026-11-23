@@ -1,0 +1,46 @@
+import std;
+import mcpp;
+import huxerui.rules;
+
+int main() {
+    if (!huxerui::rules::configure({
+            .entry = "src/main.cpp",
+            .resources = "resources",
+            .resource_namespace = "installer",
+        })) {
+        return 1;
+    }
+
+    const std::string huxerui_root = mcpp::dep_dir("huxerui");
+    if (huxerui_root.empty()) {
+        std::cerr << "hxlings-installer: cannot locate huxerui dependency root\n";
+        return 1;
+    }
+
+    mcpp::include_dir((huxerui_root + "/include").c_str());
+    mcpp::include_dir((huxerui_root + "/platform/windows").c_str());
+    mcpp::source((huxerui_root + "/platform/windows/windows_installer.cpp").c_str());
+
+    if (std::string_view(mcpp::target_os()) == "windows") {
+        const std::string wix_dir = mcpp::xpkg_dir("xim", "wix");
+        if (wix_dir.empty()) {
+            std::cerr << "hxlings-installer: cannot locate xim:wix package directory\n";
+            return 1;
+        }
+        const std::filesystem::path wix_root(wix_dir);
+        mcpp::include_dir((wix_root / "bootstrapper" / "build" / "native" / "include").generic_string().c_str());
+        mcpp::include_dir((wix_root / "dutil" / "build" / "native" / "include").generic_string().c_str());
+        mcpp::link_flag((wix_root / "bootstrapper" / "build" / "native" / "v14" / "x64" / "balutil.lib")
+                            .generic_string()
+                            .c_str());
+        mcpp::link_flag((wix_root / "dutil" / "build" / "native" / "v14" / "x64" / "dutil.lib")
+                            .generic_string()
+                            .c_str());
+        mcpp::deploy((wix_root / "bootstrapper" / "runtimes" / "win-x64" / "native" / "mbanative.dll")
+                         .generic_string()
+                         .c_str(),
+                     ".");
+    }
+
+    return 0;
+}

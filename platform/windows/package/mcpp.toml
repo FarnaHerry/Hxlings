@@ -1,0 +1,41 @@
+[package]
+name        = "hxlings-installer"
+version     = "0.1.3"
+standard    = "c++23"
+description = "HuxerUI Windows bootstrapper installer UI for Hxlings"
+license     = "MIT"
+repo        = "https://github.com/FarnaHerry/Hxlings"
+authors     = ["FarnaHerry <FarnaHerry@users.noreply.github.com>"]
+platforms   = ["windows"]
+
+[package.metadata.huxerui]
+name      = "Hxlings"
+id        = "io.github.farnaherry.hxlings.installer"
+resources = "resources"
+
+[resources]
+icon = "app.ico"
+
+[dependencies.huxerui]
+huxerui = { git = "https://github.com/HuxerUI/HuxerUI.git", branch = "main" }
+
+[target.windows.xlings.workspace]
+"xim:wix" = "5.0.2-1"
+
+[target.windows.build]
+defines = ["UNICODE", "_UNICODE", "NOMINMAX", "WIN32_LEAN_AND_MEAN",
+           "WINVER=0x0A00", "_WIN32_WINNT=0x0A00"]
+
+[target.windows.runtime]
+libraries = ["user32", "advapi32", "ole32", "oleaut32", "shell32",
+             "shlwapi", "version", "crypt32", "wininet", "msi",
+             "rpcrt4", "uuid", "gdi32", "comctl32", "wintrust"]
+
+[targets.hxlings-installer]
+kind              = "app"
+main              = "src/main.cpp"
+windows_subsystem = "windows"
+windows_entry     = "wWinMain"
+
+[build]
+sources = []

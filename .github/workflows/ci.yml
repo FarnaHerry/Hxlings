@@ -411,6 +411,27 @@ jobs:
 
           New-Item -ItemType Directory -Path dist -Force | Out-Null
 
+          $installerZip = Join-Path $env:RUNNER_TEMP 'hxlings-installer.zip'
+          $installerExtract = Join-Path $env:RUNNER_TEMP 'hxlings-installer-stage'
+          if (Test-Path $installerExtract) { Remove-Item -Recurse -Force $installerExtract }
+          Push-Location 'platform/windows/package'
+          try {
+            mcpp pack hxlings-installer --release --pkg-format zip --output $installerZip
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          } finally {
+            Pop-Location
+          }
+          Expand-Archive -Force -Path $installerZip -DestinationPath $installerExtract
+          $installerExe = Get-ChildItem -Path $installerExtract -Recurse -Filter 'hxlings-installer.exe' | Select-Object -First 1
+          if (-not $installerExe) { throw "hxlings-installer.exe not found in $installerExtract" }
+          $installerDir = $installerExe.Directory.FullName
+          foreach ($req in @('mbanative.dll', 'VCRUNTIME140.dll', 'MSVCP140.dll', 'hxlings-installer.resources\huxerui\resources.bin')) {
+            $full = Join-Path $installerDir $req
+            if (-not (Test-Path $full -PathType Leaf)) { throw "missing custom installer asset: $full" }
+          }
+          $env:HXLINGS_WINDOWS_INSTALLER_DIR = $installerDir
+          Write-Host "Staged HuxerUI Windows installer UI at $installerDir"
+
           $zipOut = "dist/hxlings-$pkgVersion-windows-x86_64.zip"
           mcpp pack hxlings --release --pkg-format zip --output $zipOut
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -441,6 +462,11 @@ jobs:
           $msiOut = "dist/hxlings-$pkgVersion-windows-x86_64.msi"
           Copy-Item -Path $msiCandidate -Destination $msiOut -Force
 
+          $msiLength = (Get-Item $msiOut).Length
+          if ($msiLength -lt 2MB) {
+            throw "MSI is implausibly small ($msiLength bytes); CAB may not be embedded"
+          }
+
           $installer = New-Object -ComObject WindowsInstaller.Installer
           $db = $installer.GetType().InvokeMember('OpenDatabase', 'InvokeMethod', $null, $installer, @((Resolve-Path $msiOut).Path, 0))
           $view = $db.GetType().InvokeMember('OpenView', 'InvokeMethod', $null, $db, @('SELECT FileName, FileSize FROM File'))
@@ -467,9 +493,101 @@ jobs:
             throw 'the MSI does not carry huxerui/app/images/tray_icon.png'
           }
 
-          if ((Get-Item $setupOut).Length -le (Get-Item $msiOut).Length) {
-            throw "setup.exe ($((Get-Item $setupOut).Length)) should be larger than chained MSI ($((Get-Item $msiOut).Length))"
+          $mediaView = $db.GetType().InvokeMember('OpenView', 'InvokeMethod', $null, $db, @('SELECT Cabinet FROM Media'))
+          $mediaView.GetType().InvokeMember('Execute', 'InvokeMethod', $null, $mediaView, $null)
+          $cabinets = @()
+          while ($true) {
+            $row = $mediaView.GetType().InvokeMember('Fetch', 'InvokeMethod', $null, $mediaView, $null)
+            if (-not $row) { break }
+            $cab = $row.GetType().InvokeMember('StringData', 'GetProperty', $null, $row, @(1))
+            if (-not [string]::IsNullOrWhiteSpace($cab)) { $cabinets += $cab }
           }
+          if ($cabinets.Count -eq 0) { throw 'MSI Media table has no Cabinet entries' }
+          foreach ($cab in $cabinets) {
+            if (-not $cab.StartsWith('#')) {
+              throw "MSI Media.Cabinet '$cab' is external (expected embedded '#...')"
+            }
+          }
+
+          $shortcutView = $db.GetType().InvokeMember('OpenView', 'InvokeMethod', $null, $db, @('SELECT Shortcut FROM Shortcut'))
+          $shortcutView.GetType().InvokeMember('Execute', 'InvokeMethod', $null, $shortcutView, $null)
+          $shortcuts = @()
+          while ($true) {
+            $row = $shortcutView.GetType().InvokeMember('Fetch', 'InvokeMethod', $null, $shortcutView, $null)
+            if (-not $row) { break }
+            $shortcuts += $row.GetType().InvokeMember('StringData', 'GetProperty', $null, $row, @(1))
+          }
+          if (-not ($shortcuts -contains 'ApplicationStartMenuShortcut')) { throw 'missing ApplicationStartMenuShortcut' }
+          if (-not ($shortcuts -contains 'ApplicationDesktopShortcutLink')) { throw 'missing ApplicationDesktopShortcutLink' }
+
+          $propView = $db.GetType().InvokeMember('OpenView', 'InvokeMethod', $null, $db, @("SELECT Value FROM Property WHERE Property = 'ARPPRODUCTICON'"))
+          $propView.GetType().InvokeMember('Execute', 'InvokeMethod', $null, $propView, $null)
+          $propRow = $propView.GetType().InvokeMember('Fetch', 'InvokeMethod', $null, $propView, $null)
+          if (-not $propRow) { throw 'missing ARPPRODUCTICON property' }
+          $arpIcon = $propRow.GetType().InvokeMember('StringData', 'GetProperty', $null, $propRow, @(1))
+          if ($arpIcon -ne 'ApplicationIcon') { throw "unexpected ARPPRODUCTICON value: $arpIcon" }
+
+          foreach ($comObj in @($propRow, $propView, $shortcutView, $mediaView, $view, $db, $installer)) {
+            if ($comObj -ne $null) {
+              [void][System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($comObj)
+            }
+          }
+
+          $adminTestRoot = Join-Path $env:RUNNER_TEMP 'msi-isolated-check'
+          if (Test-Path $adminTestRoot) { Remove-Item -Recurse -Force $adminTestRoot }
+          $isoMsiDir = Join-Path $adminTestRoot 'msi'
+          $adminDir = Join-Path $adminTestRoot 'extract'
+          New-Item -ItemType Directory -Path $isoMsiDir, $adminDir -Force | Out-Null
+          $isolatedMsi = Join-Path $isoMsiDir (Split-Path -Leaf $msiOut)
+          Copy-Item -Path $msiOut -Destination $isolatedMsi -Force
+          $msiProc = Start-Process -FilePath 'msiexec.exe' -ArgumentList @('/a', $isolatedMsi, '/qn', "TARGETDIR=$adminDir") -Wait -PassThru -NoNewWindow
+          if ($msiProc.ExitCode -ne 0) {
+            throw "standalone msiexec /a failed with exit code $($msiProc.ExitCode)"
+          }
+          $extractedExe = Get-ChildItem -Path $adminDir -Recurse -Filter 'hxlings.exe' | Select-Object -First 1
+          if (-not $extractedExe -or $extractedExe.Length -lt 1MB) {
+            throw "standalone MSI extraction missing valid hxlings.exe under $adminDir"
+          }
+          foreach ($rel in @('VCRUNTIME140.dll', 'MSVCP140.dll', 'hxlings.resources\huxerui\resources.bin', 'hxlings.resources\huxerui\app\images\hxlings.png', 'hxlings.resources\huxerui\app\images\tray_icon.png')) {
+            $p = Join-Path $extractedExe.Directory.FullName $rel
+            if (-not (Test-Path $p -PathType Leaf)) {
+              throw "standalone MSI extraction missing $p"
+            }
+          }
+          Write-Host "Verified standalone MSI extraction ($($extractedExe.Directory.FullName))"
+
+          $setupLength = (Get-Item $setupOut).Length
+          if ($setupLength -le ($msiLength + 1MB)) {
+            throw "setup.exe ($setupLength) should be larger than chained MSI ($msiLength) + 1MB"
+          }
+
+          $wixExe = Get-ChildItem -Path $env:MCPP_HOME -Recurse -Filter 'wix.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $wixExe) { throw "wix.exe not found under $($env:MCPP_HOME)" }
+          $burnOut = Join-Path $env:RUNNER_TEMP 'burn-extract-check'
+          if (Test-Path $burnOut) { Remove-Item -Recurse -Force $burnOut }
+          $burnAttached = Join-Path $burnOut 'Attached'
+          $burnUx = Join-Path $burnOut 'UX'
+          & $wixExe.FullName burn extract (Resolve-Path $setupOut).Path -out $burnAttached -outba $burnUx
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          $baExe = Get-ChildItem -Path $burnUx -Recurse -Filter 'hxlings-installer.exe' | Select-Object -First 1
+          if (-not $baExe -or $baExe.Length -lt 1MB) {
+            throw "Burn UX container missing valid hxlings-installer.exe under $burnUx"
+          }
+          foreach ($rel in @('mbanative.dll', 'VCRUNTIME140.dll', 'MSVCP140.dll', 'hxlings-installer.resources\huxerui\resources.bin', 'hxlings-installer.resources\huxerui\installer\images\hxlings.png')) {
+            $p = Join-Path $baExe.Directory.FullName $rel
+            if (-not (Test-Path $p -PathType Leaf)) {
+              throw "Burn UX container missing $p"
+            }
+          }
+          $baData = Get-ChildItem -Path $burnUx -Recurse -Filter 'BootstrapperApplicationData.xml' | Select-Object -First 1
+          if ($baData) {
+            $baXml = Get-Content $baData.FullName -Raw
+            if ($baXml -match 'WixStandardBootstrapperApplication') {
+              throw 'Burn bundle unexpectedly references WixStandardBootstrapperApplication'
+            }
+          }
+          Write-Host "Verified Burn custom HuxerUI BA ($($baExe.FullName), $($baExe.Length) bytes)"
 
           Get-Item dist/* | Format-Table Name, Length
 

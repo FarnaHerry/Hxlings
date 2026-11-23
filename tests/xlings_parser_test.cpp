@@ -1,4 +1,5 @@
 import std;
+import mcpplibs.os;
 import xlings.types;
 import xlings.parser;
 import xlings.process;
@@ -466,6 +467,92 @@ void TestBundledResourcesAndChildEnvSanitization() {
     }
 }
 
+void TestWindowsProcessHelpersAndSpawn() {
+    Check(QuoteWindowsArg("plain") == "plain", "QuoteWindowsArg leaves plain token unquoted");
+    Check(QuoteWindowsArg("") == "\"\"", "QuoteWindowsArg quotes empty arg");
+    Check(QuoteWindowsArg("hello world") == "\"hello world\"", "QuoteWindowsArg wraps whitespace");
+    Check(QuoteWindowsArg("say \"hi\"") == "\"say \\\"hi\\\"\"", "QuoteWindowsArg escapes quotes");
+    Check(QuoteWindowsArg("C:\\Program Files\\") == "\"C:\\Program Files\\\\\"",
+          "QuoteWindowsArg doubles trailing backslash before closing quote");
+    Check(QuoteWindowsArg("a\\\\\"b") == "\"a\\\\\\\\\\\"b\"",
+          "QuoteWindowsArg doubles backslashes before internal quote");
+
+    {
+        const std::string cmd = BuildWindowsCommandLine({
+            "C:\\Program Files\\xlings.exe",
+            "search",
+            "hello \"world\"",
+        });
+        Check(cmd == "\"C:\\Program Files\\xlings.exe\" search \"hello \\\"world\\\"\"",
+              "BuildWindowsCommandLine builds exe command line");
+
+        const std::string bat = BuildWindowsCommandLine({
+            "C:\\My Tools\\run.CMD",
+            "interface",
+            "list_packages",
+        });
+        Check(bat == "cmd.exe /d /v:off /s /c \"\"C:\\My Tools\\run.CMD\" interface list_packages\"",
+              "BuildWindowsCommandLine wraps batch script via cmd.exe");
+    }
+
+    {
+        const std::vector<std::string> base = {
+            "=C:=C:\\work",
+            "Path=C:\\a",
+            "XLINGS_HOME=C:\\Users\\demo\\.mcpp\\registry",
+            "alpha=1",
+        };
+        const std::vector<std::pair<std::string, std::optional<std::string>>> overrides = {
+            {"xlings_home", std::nullopt},
+            {"path", "C:\\clean"},
+            {"Beta", "2"},
+        };
+        const auto merged = MergeWindowsEnvEntries(base, overrides);
+        Check(merged.size() == 4, "MergeWindowsEnvEntries count after erase+insert");
+        Check(merged[0] == "=C:=C:\\work", "MergeWindowsEnvEntries keeps drive-cwd hidden entry first");
+        Check(merged[1] == "alpha=1", "MergeWindowsEnvEntries preserves untouched var sorted");
+        Check(merged[2] == "Beta=2", "MergeWindowsEnvEntries inserts override in case-insensitive order");
+        Check(merged[3] == "path=C:\\clean", "MergeWindowsEnvEntries replaces case-insensitively");
+    }
+
+    if constexpr (mcpplibs::os::is_windows) {
+        std::vector<std::string> lines;
+        const ProcessResult res = RunProcessStreaming(
+            {"cmd.exe", "/d", "/c", "echo hxlings-win-ok"},
+            [&](const std::string& line) { lines.push_back(line); }
+        );
+        Check(res.exit_code == 0, "Windows RunProcessStreaming cmd echo exit code 0");
+        Check(!res.cancelled, "Windows RunProcessStreaming cmd echo not cancelled");
+        Check(res.raw_output.find("hxlings-win-ok") != std::string::npos,
+              "Windows RunProcessStreaming cmd echo raw_output contains marker");
+        bool saw_line = false;
+        for (const auto& l : lines) {
+            if (l.find("hxlings-win-ok") != std::string::npos) {
+                saw_line = true;
+                break;
+            }
+        }
+        Check(saw_line, "Windows RunProcessStreaming cmd echo streamed line");
+
+        auto ctrl = std::make_shared<ActiveProcessControl>();
+        const auto t0 = std::chrono::steady_clock::now();
+        std::thread canceller([ctrl] {
+            std::this_thread::sleep_for(std::chrono::milliseconds(150));
+            ctrl->Cancel();
+        });
+        const ProcessResult cancel_res = RunProcessStreaming(
+            {"cmd.exe", "/d", "/c", "ping -n 10 127.0.0.1 >nul"},
+            {},
+            ctrl
+        );
+        canceller.join();
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - t0);
+        Check(cancel_res.cancelled, "Windows RunProcessStreaming marks cancelled=true");
+        Check(elapsed < std::chrono::seconds(3), "Windows RunProcessStreaming cancel completes promptly");
+    }
+}
+
 } // namespace
 
 int main() {
@@ -483,6 +570,7 @@ int main() {
     TestProcessStreamingAndCancel();
     TestAppSettingsSerializationAndPersistence();
     TestBundledResourcesAndChildEnvSanitization();
+    TestWindowsProcessHelpersAndSpawn();
 
     if (failures == 0) {
         std::println("All parser and xlings integration tests passed.");

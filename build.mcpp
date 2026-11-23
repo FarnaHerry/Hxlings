@@ -1,5 +1,6 @@
 import std;
 import mcpp;
+import mcpp.dist.wix;
 import huxerui.rules;
 
 namespace {
@@ -17,6 +18,21 @@ void write_if_different(const std::filesystem::path& path, std::string_view byte
     if (out) {
         out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
     }
+}
+
+std::string xml_escape(std::string_view text) {
+    std::string out;
+    out.reserve(text.size());
+    for (const char ch : text) {
+        switch (ch) {
+            case '&':  out += "&amp;";  break;
+            case '<':  out += "&lt;";   break;
+            case '>':  out += "&gt;";   break;
+            case '"':  out += "&quot;"; break;
+            default:   out.push_back(ch); break;
+        }
+    }
+    return out;
 }
 
 void configure_linux_glibc_compat() {
@@ -115,11 +131,199 @@ huxerui::rules::options make_rules_options() {
     return opt;
 }
 
-// Mirror huxerui::rules::configure({}) on macOS while omitting dev-time
-// `bundle:*` edges that reference ${mcpp.target_file:<program>} and break
-// `mcpp test` when only test targets are built. Deployed HuxerUI/ resources
-// and release packaging via mcpp::dist::apple remain active.
-bool configure_macos() {
+std::string make_windows_package_wxs(
+    const std::string& version,
+    const std::string& app_ico
+) {
+    constexpr std::string_view kProduct = "Hxlings";
+    constexpr std::string_view kMaker = "FarnaHerry";
+    constexpr std::string_view kMsiUpgrade = "{AB41DC03-9AF1-5EFA-8AC8-0577E1EB2FEA}";
+    constexpr std::string_view kAppId = "io.github.farnaherry.hxlings";
+    return std::string(
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
+        "<Wix xmlns=\"http://wixtoolset.org/schemas/v4/wxs\">\n"
+        "  <Package Codepage=\"65001\" Name=\"") + xml_escape(kProduct) +
+        "\" Manufacturer=\"" + xml_escape(kMaker) +
+        "\" Version=\"" + xml_escape(version) +
+        "\" UpgradeCode=\"" + std::string(kMsiUpgrade) +
+        "\" Scope=\"perMachine\">\n"
+        "    <MajorUpgrade DowngradeErrorMessage=\"A newer version of [ProductName] is already installed.\" />\n"
+        "    <MediaTemplate EmbedCab=\"yes\" />\n"
+        "    <Icon Id=\"ApplicationIcon\" SourceFile=\"" + xml_escape(app_ico) + "\" />\n"
+        "    <Property Id=\"ARPPRODUCTICON\" Value=\"ApplicationIcon\" />\n"
+        "    <Property Id=\"CREATE_DESKTOP_SHORTCUT\" Value=\"0\" Secure=\"yes\" />\n"
+        "    <StandardDirectory Id=\"ProgramFiles64Folder\">\n"
+        "      <Directory Id=\"INSTALLFOLDER\" Name=\"" + xml_escape(kProduct) + "\">\n"
+        "        <Component Id=\"MainExecutable\">\n"
+        "          <File Id=\"MainExecutable\" Source=\"$(Executable)\" KeyPath=\"yes\" />\n"
+        "        </Component>\n"
+        "      </Directory>\n"
+        "    </StandardDirectory>\n"
+        "    <StandardDirectory Id=\"ProgramMenuFolder\">\n"
+        "      <Directory Id=\"APPLICATIONPROGRAMMENU\" Name=\"" + xml_escape(kProduct) + "\" />\n"
+        "    </StandardDirectory>\n"
+        "    <StandardDirectory Id=\"DesktopFolder\" />\n"
+        "    <Component Id=\"ApplicationShortcut\" Directory=\"APPLICATIONPROGRAMMENU\">\n"
+        "      <Shortcut Id=\"ApplicationStartMenuShortcut\" Name=\"" + xml_escape(kProduct) + "\"\n"
+        "                Target=\"[INSTALLFOLDER]hxlings.exe\" WorkingDirectory=\"INSTALLFOLDER\"\n"
+        "                Icon=\"ApplicationIcon\" />\n"
+        "      <RemoveFolder Id=\"RemoveApplicationProgramMenu\" On=\"uninstall\" />\n"
+        "      <RegistryValue Root=\"HKLM\" Key=\"Software\\" + std::string(kAppId) + "\\" +
+        std::string(kProduct) + "\" Name=\"installed\" Type=\"integer\" Value=\"1\" KeyPath=\"yes\" />\n"
+        "    </Component>\n"
+        "    <Component Id=\"ApplicationDesktopShortcut\" Directory=\"DesktopFolder\">\n"
+        "      <Shortcut Id=\"ApplicationDesktopShortcutLink\" Name=\"" + xml_escape(kProduct) + "\"\n"
+        "                Target=\"[INSTALLFOLDER]hxlings.exe\" WorkingDirectory=\"INSTALLFOLDER\"\n"
+        "                Icon=\"ApplicationIcon\" />\n"
+        "      <RegistryValue Root=\"HKLM\" Key=\"Software\\" + std::string(kAppId) + "\\" +
+        std::string(kProduct) + "\" Name=\"desktopShortcut\" Type=\"integer\" Value=\"1\" KeyPath=\"yes\" />\n"
+        "    </Component>\n"
+        "    <Feature Id=\"Application\" Title=\"" + xml_escape(kProduct) + "\" Level=\"1\">\n"
+        "      <ComponentRef Id=\"MainExecutable\" />\n"
+        "      <ComponentGroupRef Id=\"StagedFiles\" />\n"
+        "      <ComponentRef Id=\"ApplicationShortcut\" />\n"
+        "    </Feature>\n"
+        "    <Feature Id=\"DesktopShortcut\" Title=\"Desktop shortcut\" Level=\"2\" AllowAbsent=\"yes\">\n"
+        "      <Level Value=\"1\" Condition=\"CREATE_DESKTOP_SHORTCUT = 1\" />\n"
+        "      <ComponentRef Id=\"ApplicationDesktopShortcut\" />\n"
+        "    </Feature>\n"
+        "  </Package>\n"
+        "</Wix>\n";
+}
+
+std::string make_windows_bundle_wxs(
+    const std::string& version,
+    const std::string& app_ico,
+    const std::string& installer_exe,
+    const std::vector<std::pair<std::string, std::string>>& payloads
+) {
+    constexpr std::string_view kProduct = "Hxlings";
+    constexpr std::string_view kMaker = "FarnaHerry";
+    constexpr std::string_view kBundleUpgrade = "{6FD6C90A-35C1-5FA5-9846-8CD75DBC05D6}";
+    std::string doc =
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
+        "<Wix xmlns=\"http://wixtoolset.org/schemas/v4/wxs\">\n"
+        "  <Bundle Name=\"" + xml_escape(kProduct) +
+        "\" Manufacturer=\"" + xml_escape(kMaker) +
+        "\" Version=\"" + xml_escape(version) +
+        "\" UpgradeCode=\"" + std::string(kBundleUpgrade) +
+        "\" IconSourceFile=\"" + xml_escape(app_ico) + "\">\n"
+        "    <BootstrapperApplication SourceFile=\"" + xml_escape(installer_exe) + "\">\n"
+        "      <PayloadGroupRef Id=\"HxlingsInstallerPayloads\" />\n"
+        "    </BootstrapperApplication>\n"
+        "    <Variable Name=\"InstallFolder\" Type=\"formatted\" Value=\"[ProgramFiles64Folder]" +
+        xml_escape(kProduct) + "\" />\n"
+        "    <Variable Name=\"CreateDesktopShortcut\" Type=\"numeric\" Value=\"0\" />\n"
+        "    <Chain>\n"
+        "      <MsiPackage SourceFile=\"$(Msi)\">\n"
+        "        <MsiProperty Name=\"INSTALLFOLDER\" Value=\"[InstallFolder]\" />\n"
+        "        <MsiProperty Name=\"CREATE_DESKTOP_SHORTCUT\" Value=\"[CreateDesktopShortcut]\" />\n"
+        "      </MsiPackage>\n"
+        "    </Chain>\n"
+        "  </Bundle>\n"
+        "  <Fragment>\n"
+        "    <PayloadGroup Id=\"HxlingsInstallerPayloads\">\n";
+    for (const auto& [source_file, target_name] : payloads) {
+        doc += "      <Payload SourceFile=\"" + xml_escape(source_file) +
+               "\" Name=\"" + xml_escape(target_name) + "\" />\n";
+    }
+    doc +=
+        "    </PayloadGroup>\n"
+        "  </Fragment>\n"
+        "</Wix>\n";
+    return doc;
+}
+
+bool plan_windows_wix(const std::string& program) {
+    const char* raw_version = mcpp::package_version();
+    const std::string version = (raw_version != nullptr && *raw_version != '\0')
+        ? std::string(raw_version)
+        : std::string("0.1.0");
+
+    mcpp::dist::wix::options installer;
+    installer.target = program;
+    installer.product_name = "Hxlings";
+    installer.manufacturer = "FarnaHerry";
+    installer.version = version;
+    installer.upgrade_code = "{AB41DC03-9AF1-5EFA-8AC8-0577E1EB2FEA}";
+
+    const std::string_view fmt = mcpp::pack_format();
+    if (fmt == "msi" || fmt == "setup") {
+        const std::filesystem::path manifest(mcpp::manifest_dir());
+        const std::filesystem::path out_dir(mcpp::out_dir());
+        const std::filesystem::path app_ico = manifest / "platform" / "windows" / "app.ico";
+        std::error_code ec;
+        if (!std::filesystem::is_regular_file(app_ico, ec)) {
+            std::cerr << "hxlings build.mcpp: missing Windows icon at " << app_ico.string() << '\n';
+            return false;
+        }
+        const std::filesystem::path pkg_wxs = out_dir / "Hxlings-package.wxs";
+        write_if_different(pkg_wxs, make_windows_package_wxs(version, app_ico.string()));
+        installer.wxs = pkg_wxs.string();
+        installer.inputs.push_back(app_ico.string());
+
+        if (fmt == "setup") {
+            const char* env_dir = std::getenv("HXLINGS_WINDOWS_INSTALLER_DIR");
+            const std::filesystem::path installer_dir =
+                (env_dir != nullptr && *env_dir != '\0')
+                    ? std::filesystem::path(env_dir)
+                    : (manifest / "platform" / "windows" / "package" / "dist" / "stage");
+            const std::filesystem::path installer_exe = installer_dir / "hxlings-installer.exe";
+            const std::filesystem::path mbanative = installer_dir / "mbanative.dll";
+            const std::filesystem::path res_bin =
+                installer_dir / "hxlings-installer.resources" / "huxerui" / "resources.bin";
+            if (!std::filesystem::is_regular_file(installer_exe, ec) ||
+                !std::filesystem::is_regular_file(mbanative, ec) ||
+                !std::filesystem::is_regular_file(res_bin, ec)) {
+                std::cerr << "hxlings build.mcpp: HuxerUI custom installer stage missing in "
+                          << installer_dir.string()
+                          << " (expected hxlings-installer.exe, mbanative.dll, and "
+                             "hxlings-installer.resources/huxerui/resources.bin)\n";
+                return false;
+            }
+
+            std::vector<std::pair<std::string, std::string>> payloads;
+            for (auto it = std::filesystem::recursive_directory_iterator(installer_dir, ec);
+                 it != std::filesystem::recursive_directory_iterator();
+                 it.increment(ec)) {
+                if (ec) break;
+                if (!it->is_regular_file(ec)) continue;
+                std::string rel = std::filesystem::relative(it->path(), installer_dir, ec).generic_string();
+                if (ec || rel.empty()) continue;
+                if (rel == "hxlings-installer.exe" || rel == "README.md" || rel == "LICENSE" ||
+                    rel == "HOST-REQUIREMENTS" || rel == "mcpp-package.json" ||
+                    rel.starts_with("share/")) {
+                    continue;
+                }
+                std::ranges::replace(rel, '/', '\\');
+                payloads.emplace_back(it->path().string(), std::move(rel));
+            }
+            std::ranges::sort(payloads, [](const auto& a, const auto& b) { return a.second < b.second; });
+
+            const std::filesystem::path bundle_wxs = out_dir / "Hxlings-bundle.wxs";
+            write_if_different(
+                bundle_wxs,
+                make_windows_bundle_wxs(version, app_ico.string(), installer_exe.string(), payloads)
+            );
+            installer.bundle_wxs = bundle_wxs.string();
+            installer.bundle_inputs.push_back(app_ico.string());
+            installer.bundle_inputs.push_back(installer_exe.string());
+            for (const auto& [source_file, target_name] : payloads) {
+                (void)target_name;
+                installer.bundle_inputs.push_back(source_file);
+            }
+        }
+    }
+
+    return mcpp::dist::wix::generate(std::move(installer));
+}
+
+// Mirror huxerui::rules::configure({}) cleanly on macOS and Windows:
+// - macOS omits dev-time `bundle:*` edges that reference ${mcpp.target_file:<program>}
+//   and break `mcpp test` when only test targets are built.
+// - Windows delegates packaging to plan_windows_wix() with EmbedCab="yes" and the
+//   custom HuxerUI bootstrapper application.
+bool configure_custom(bool is_macos, bool is_windows) {
     const std::string root = huxerui::rules::sdk_root();
     if (root.empty()) {
         std::cerr << "huxerui.rules: cannot locate the HuxerUI SDK root\n";
@@ -145,16 +349,24 @@ bool configure_macos() {
 
     const std::string prelude =
         root + "/buildtools/mcpp/huxerui-build-rules/include/huxerui_scope_prelude.h";
+    const std::string_view compiler = mcpp::compiler();
+    const bool msvc = compiler.find("msvc") != std::string_view::npos;
     mcpp::include_dir((root + "/buildtools/mcpp/huxerui-build-rules/include").c_str());
     if (!has_module_interface) {
-        mcpp::cxxflag("-include");
-        mcpp::cxxflag("typeinfo");
-        mcpp::cxxflag("-include");
-        mcpp::cxxflag(prelude.c_str());
+        if (is_windows && msvc) {
+            mcpp::cxxflag("/FItypeinfo");
+            mcpp::cxxflag(("/FI" + prelude).c_str());
+        } else {
+            mcpp::cxxflag("-include");
+            mcpp::cxxflag("typeinfo");
+            mcpp::cxxflag("-include");
+            mcpp::cxxflag(prelude.c_str());
+        }
     }
     mcpp::rerun_if_changed(prelude.c_str());
     mcpp::rerun_if_changed_glob("src/**/*.cpp");
     mcpp::rerun_if_changed_glob("src/**/*.cppm");
+    mcpp::rerun_if_changed_glob("resources/**");
 
     std::vector<huxerui::rules::edge> edges;
     auto cg = huxerui::rules::plan_codegen(selected);
@@ -169,7 +381,13 @@ bool configure_macos() {
         }
     }
     if (!cg.empty()) {
-        mcpp::cxxflag("-Wno-unknown-attributes");
+        if (is_windows && msvc) {
+            mcpp::cxxflag("/wd5030");
+        } else if (compiler.find("gcc") != std::string_view::npos) {
+            mcpp::cxxflag("-Wno-attributes");
+        } else {
+            mcpp::cxxflag("-Wno-unknown-attributes");
+        }
         std::vector<std::string> seen;
         for (const std::string& rel : selected) {
             const std::string dir = (manifest / rel).parent_path().string();
@@ -191,7 +409,7 @@ bool configure_macos() {
     auto rs = huxerui::rules::plan_resources(opt, graph, has_module_interface);
     bool has_resource_edges = false;
     for (auto& e : rs) {
-        if (e.id.starts_with("bundle:")) continue;
+        if (is_macos && e.id.starts_with("bundle:")) continue;
         has_resource_edges = true;
         edges.push_back(std::move(e));
     }
@@ -204,7 +422,9 @@ bool configure_macos() {
     bool packaged = true;
     if (graph.is_root) {
         for (const std::string& program : graph.programs) {
-            packaged = huxerui::rules::plan_packages(opt, program, graph) && packaged;
+            packaged = (is_windows
+                ? plan_windows_wix(program)
+                : huxerui::rules::plan_packages(opt, program, graph)) && packaged;
         }
     }
     return packaged;
@@ -213,13 +433,15 @@ bool configure_macos() {
 } // namespace
 
 int main() {
-    const bool is_macos = std::string_view(mcpp::target_os()) == "macos";
-    if (!is_macos) {
+    const std::string_view target_os = mcpp::target_os();
+    const bool is_macos = target_os == "macos";
+    const bool is_windows = target_os == "windows";
+    if (!is_macos && !is_windows) {
         configure_linux_glibc_compat();
         patch_linux_self_contained_launcher();
     }
-    const bool configured = is_macos
-        ? configure_macos()
+    const bool configured = (is_macos || is_windows)
+        ? configure_custom(is_macos, is_windows)
         : huxerui::rules::configure(make_rules_options());
     if (!configured) return 1;
 
