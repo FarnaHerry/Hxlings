@@ -1,8 +1,10 @@
 import std;
 import mcpplibs.os;
+import nlohmann.json;
 import xlings.types;
 import xlings.parser;
 import xlings.process;
+import xlings.client;
 import hxlings.settings;
 import hxlings.platform_icon;
 import hxlings.updater;
@@ -631,6 +633,39 @@ void TestConfigExtensionsAndNetworkParsers() {
     const auto probe = ParseNetworkProbeEvents(probe_evs, "https://raw.gitcode.com/test");
     Check(probe.ok && probe.reachable && probe.http_status == 200 && probe.host == "raw.gitcode.com",
           "network probe parsed");
+
+    const auto timeout_evs = ParseNdjsonLines(
+        R"({"dataKind":"network_probe","kind":"data","payload":{"elapsed_seconds":3.01,"host":"example.com","http_status":0,"proxy":false,"reachable":false,"status":"timeout"}})"
+    );
+    const auto timeout_probe = ParseNetworkProbeEvents(timeout_evs, "https://example.com");
+    Check(timeout_probe.ok && !timeout_probe.reachable && timeout_probe.status == "timeout",
+          "network probe timeout payload parsed");
+
+    const auto err_evs = ParseNdjsonLines(
+        R"({"code":"E_INTERNAL","kind":"error","message":"probe failed"})"
+    );
+    const auto err_probe = ParseNetworkProbeEvents(err_evs, "https://example.com");
+    Check(!err_probe.ok && err_probe.status == "error" && err_probe.error_message == "probe failed",
+          "network probe error event parsed");
+
+    const auto default_probe_args = BuildProbeUrlArgs("https://github.com/FarnaHerry/Hxlings");
+    Check(default_probe_args["url"] == "https://github.com/FarnaHerry/Hxlings" &&
+              !default_probe_args.contains("socket_timeout_ms"),
+          "BuildProbeUrlArgs omits socket_timeout_ms by default");
+    const auto clamped_high_args = BuildProbeUrlArgs("https://example.com", 5000);
+    Check(clamped_high_args["socket_timeout_ms"] == 3000, "BuildProbeUrlArgs clamps >3000 to 3000");
+    const auto clamped_low_args = BuildProbeUrlArgs("https://example.com", 50);
+    Check(clamped_low_args["socket_timeout_ms"] == 100, "BuildProbeUrlArgs clamps <100 to 100");
+    const auto valid_probe_args = BuildProbeUrlArgs("https://example.com", 2500);
+    Check(valid_probe_args["socket_timeout_ms"] == 2500, "BuildProbeUrlArgs preserves 2500");
+
+    const XlingsClient live_client;
+    const auto live_default = live_client.ProbeUrl("http://127.0.0.1:1");
+    Check(live_default.ok && live_default.error_message.empty() && !live_default.reachable,
+          "Live offline ProbeUrl omits socket_timeout_ms without CLI exit 2");
+    const auto live_clamped = live_client.ProbeUrl("http://127.0.0.1:1", 5000);
+    Check(live_clamped.ok && live_clamped.error_message.empty() && !live_clamped.reachable,
+          "Live offline ProbeUrl clamps 5000ms without CLI exit 2");
 }
 
 void TestSubosGovernanceAndFormatParsers() {

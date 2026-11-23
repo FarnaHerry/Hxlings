@@ -1421,11 +1421,11 @@ public:
     void ProbeNetworkUrlAsync(TaskScope tasks, ToastHandle toast, std::string url) {
         const std::string normalized = NormalizeBrowserUrl(url);
         if (normalized.empty()) {
-            toast.Show("请输入有效的 http/https 链接");
+            ShowToastSafe("请输入有效的 http/https 链接", toast);
             return;
         }
         if (probing_url.Get()) {
-            toast.Show("正在探测网络连通性，请稍候");
+            ShowToastSafe("正在探测网络连通性，请稍候", toast);
             return;
         }
         probing_url = true;
@@ -1433,14 +1433,18 @@ public:
         const XlingsClient client = client_;
         tasks.Launch([self, client, toast, normalized]() -> Task<void> {
             auto res = co_await RunWorker([client, normalized]() {
-                return client.ProbeUrl(normalized, 5000);
+                return client.ProbeUrl(normalized);
             });
             self->network_probe_result = res;
             self->probing_url = false;
             if (res.reachable) {
-                toast.Show("连通正常 (" + std::to_string(res.http_status) + ")");
+                self->ShowToastSafe("连通正常 (" + std::to_string(res.http_status) + ")", toast);
+            } else if (!res.error_message.empty()) {
+                self->ShowToastSafe("探测失败: " + res.error_message, toast);
+            } else if (!res.status.empty()) {
+                self->ShowToastSafe("探测不可达 (" + res.status + ")", toast);
             } else {
-                toast.Show(res.error_message.empty() ? "探测不可达" : ("探测失败: " + res.error_message));
+                self->ShowToastSafe("探测不可达", toast);
             }
         });
     }

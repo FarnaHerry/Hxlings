@@ -11,6 +11,15 @@ export namespace hxlings {
 using EventCallback = std::function<void(const NdjsonEvent&)>;
 using LineCallback = std::function<void(const std::string&)>;
 
+inline nlohmann::json BuildProbeUrlArgs(std::string_view url, int socket_timeout_ms = 0) {
+    nlohmann::json args = {{"url", std::string(url)}};
+    if (socket_timeout_ms > 0) {
+        // xlings 2026.11.22.1 probe_url rejects socket_timeout_ms > 3000 (exit 2).
+        args["socket_timeout_ms"] = std::clamp(socket_timeout_ms, 100, 3000);
+    }
+    return args;
+}
+
 class XlingsClient {
 public:
     explicit XlingsClient(std::string binary_path = ResolveXlingsBinary())
@@ -528,12 +537,16 @@ public:
         return ParseNetworkEndpointsEvents(outcome.events);
     }
 
-    NetworkProbeResult ProbeUrl(std::string_view url, int socket_timeout_ms = 5000) const {
-        const auto outcome = RunInterface(
-            "probe_url",
-            {{"url", std::string(url)}, {"socket_timeout_ms", socket_timeout_ms}}
-        );
-        return ParseNetworkProbeEvents(outcome.events, url);
+    NetworkProbeResult ProbeUrl(std::string_view url, int socket_timeout_ms = 0) const {
+        const auto outcome = RunInterface("probe_url", BuildProbeUrlArgs(url, socket_timeout_ms));
+        auto res = ParseNetworkProbeEvents(outcome.events, url);
+        if (!res.ok && res.error_message.empty() && !outcome.error_message.empty()) {
+            res.error_message = outcome.error_message;
+        }
+        if (!res.ok && res.error_message.empty() && outcome.exit_code != 0) {
+            res.error_message = "probe_url exited with code " + std::to_string(outcome.exit_code);
+        }
+        return res;
     }
 
     std::vector<ConfigThemeItem> QueryConfigThemes() const {

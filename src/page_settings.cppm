@@ -331,14 +331,22 @@ View NetworkProbeCard(
 
     View probe_summary = View{};
     if (probe.has_value()) {
-        const long long ms = std::llround(probe->elapsed_seconds * 1000.0);
-        const std::string detail = probe->host + " · HTTP " + std::to_string(probe->http_status) +
-                                   " · " + std::to_string(ms) + " ms" +
-                                   (probe->proxy ? " · 走代理" : " · 直连") +
-                                   (probe->error_message.empty() ? "" : (" · " + probe->error_message));
+        const std::string target_label = probe->host.empty() ? probe->url : probe->host;
+        std::string detail;
+        if (!probe->ok) {
+            detail = target_label + " · " +
+                     (probe->error_message.empty() ? std::string("探测失败") : probe->error_message);
+        } else {
+            const long long ms = std::llround(probe->elapsed_seconds * 1000.0);
+            detail = target_label + " · HTTP " + std::to_string(probe->http_status) +
+                     " · " + std::to_string(ms) + " ms" +
+                     (probe->proxy ? " · 走代理" : " · 直连") +
+                     (!probe->reachable && !probe->status.empty() ? (" · " + probe->status) : "") +
+                     (probe->error_message.empty() ? "" : (" · " + probe->error_message));
+        }
         probe_summary = Row {
             StatusBadge(
-                probe->reachable ? "可达" : "不可达",
+                probe->reachable ? "可达" : (probe->ok ? "不可达" : "失败"),
                 probe->reachable ? sp.success : sp.danger,
                 probe->reachable ? sp.success_bg : sp.danger_bg
             ),

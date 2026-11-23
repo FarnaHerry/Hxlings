@@ -59,3 +59,7 @@
 15. **Windows GUI 进程调用 `mcpplibs::os::process` 拉起控制台 `xlings.exe` 连续弹出终端窗口**
     - **现象**：`hxlings.exe` 为 `windows_subsystem = "windows"`，通过当前 `mcpplibs.os`（无 `CREATE_NO_WINDOW` 选项）调用控制台 `xlings.exe` 时，Windows 为每个子进程弹出可见终端（启动 5 路并发 `RefreshCore` 会连闪一堆终端）。
     - **解决**：`src/xlings_process.cppm` 在 `os::is_windows` 下改由 `kernel32.dll` 动态调用 `CreateProcessW` 并传入 `CREATE_NO_WINDOW`（`0x08000000`）+ `SW_HIDE` + Job Object（`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`）；并发创建管道/可继承句柄区间须加 `spawn_mutex`，防止并发子进程误继承写端导致 `PeekNamedPipe` 阻塞不返回 EOF。
+
+16. **`xlings interface probe_url` 对 `socket_timeout_ms > 3000` 返回 `exit 2`**
+    - **现象**：向 `xlings interface probe_url` 传入 `{"url":..., "socket_timeout_ms":5000}`（或 `<= 0`）会直接以 `probe_url failed (exit 2) with no error detail on the stream` 退出，而不传入该字段或传入 `1..3000` 则正常探测并返回 `network_probe` 事件。
+    - **解决**：`BuildProbeUrlArgs` 默认省略 `socket_timeout_ms`（沿用 CLI 内建默认值），显式传正数时限制在 `[100, 3000]`；`XlingsClient::ProbeUrl` 在无 `network_probe` 数据时兜底保留 `outcome.error_message` / `exit_code`。
