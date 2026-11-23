@@ -3,6 +3,7 @@ export module hxlings.page.dashboard;
 import std;
 import huxerui;
 import xlings.types;
+import xlings.parser;
 import hxlings.theme;
 import hxlings.icons;
 import hxlings.store;
@@ -329,7 +330,7 @@ View DashboardPage() {
                 Text(entry.command, TextRole::Body)
                     .Style(TextStyle{.font = Font::Monospace(12.5F), .foreground = theme.colors.on_surface})
                     .With(Grow(1.0F)),
-                Text(entry.started, TextRole::Label)
+                Text(FormatLocalTimestamp(entry.started), TextRole::Label)
                     .Style(TextStyle{.font = Font::Monospace(11.5F), .foreground = theme.colors.on_surface_variant}),
             }.With(
                 Padding(EdgeInsets::Symmetric(10.0F, 7.0F)),

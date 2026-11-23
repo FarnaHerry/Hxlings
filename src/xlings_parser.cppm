@@ -1515,3 +1515,229 @@ std::string FormatSubosRollbackListEvents(const std::vector<NdjsonEvent>& events
 }
 
 } // namespace hxlings
+
+namespace hxlings::detail {
+
+bool ParseAsciiDigits(std::string_view sv, std::size_t pos, std::size_t len, int& out) {
+    if (pos + len > sv.size()) return false;
+    int val = 0;
+    for (std::size_t i = 0; i < len; ++i) {
+        const unsigned char ch = static_cast<unsigned char>(sv[pos + i]);
+        if (ch < '0' || ch > '9') return false;
+        val = val * 10 + static_cast<int>(ch - '0');
+    }
+    out = val;
+    return true;
+}
+
+std::optional<std::int64_t> TryParseIsoTimestamp(std::string_view sv, bool& has_explicit_zone) {
+    has_explicit_zone = false;
+    if (sv.size() < 19) return std::nullopt;
+    if (sv[4] != '-' || sv[7] != '-' || (sv[10] != 'T' && sv[10] != 't' && sv[10] != ' ') ||
+        sv[13] != ':' || sv[16] != ':') {
+        return std::nullopt;
+    }
+
+    int year = 0, month = 0, day = 0, hour = 0, minute = 0, second = 0;
+    if (!ParseAsciiDigits(sv, 0, 4, year) || !ParseAsciiDigits(sv, 5, 2, month) ||
+        !ParseAsciiDigits(sv, 8, 2, day) || !ParseAsciiDigits(sv, 11, 2, hour) ||
+        !ParseAsciiDigits(sv, 14, 2, minute) || !ParseAsciiDigits(sv, 17, 2, second)) {
+        return std::nullopt;
+    }
+    if (month < 1 || month > 12 || day < 1 || day > 31 ||
+        hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 59) {
+        return std::nullopt;
+    }
+
+    const std::chrono::year_month_day ymd{
+        std::chrono::year{year},
+        std::chrono::month{static_cast<unsigned>(month)},
+        std::chrono::day{static_cast<unsigned>(day)},
+    };
+    if (!ymd.ok()) return std::nullopt;
+
+    std::size_t pos = 19;
+    if (pos < sv.size() && (sv[pos] == '.' || sv[pos] == ',')) {
+        ++pos;
+        std::size_t frac_digits = 0;
+        while (pos < sv.size() && sv[pos] >= '0' && sv[pos] <= '9') {
+            ++pos;
+            ++frac_digits;
+        }
+        if (frac_digits == 0 || frac_digits > 9) return std::nullopt;
+    }
+
+    int offset_minutes = 0;
+    if (pos < sv.size()) {
+        const char tz = sv[pos];
+        if (tz == 'Z' || tz == 'z') {
+            has_explicit_zone = true;
+            ++pos;
+        } else if (tz == '+' || tz == '-') {
+            const int sign = (tz == '+') ? 1 : -1;
+            ++pos;
+            int tz_h = 0, tz_m = 0;
+            if (!ParseAsciiDigits(sv, pos, 2, tz_h) || tz_h > 23) return std::nullopt;
+            pos += 2;
+            if (pos < sv.size()) {
+                if (sv[pos] == ':') ++pos;
+                if (!ParseAsciiDigits(sv, pos, 2, tz_m) || tz_m > 59) return std::nullopt;
+                pos += 2;
+            }
+            offset_minutes = sign * (tz_h * 60 + tz_m);
+            has_explicit_zone = true;
+        } else {
+            return std::nullopt;
+        }
+    }
+    if (pos != sv.size()) return std::nullopt;
+
+    const std::int64_t days = std::chrono::sys_days{ymd}.time_since_epoch().count();
+    const std::int64_t base_sec = days * 86400LL +
+                                  static_cast<std::int64_t>(hour) * 3600LL +
+                                  static_cast<std::int64_t>(minute) * 60LL +
+                                  static_cast<std::int64_t>(second);
+    return base_sec - static_cast<std::int64_t>(offset_minutes) * 60LL;
+}
+
+std::size_t MatchIsoTimestampPrefixEnd(std::string_view sv, std::size_t start) {
+    if (start + 20 > sv.size()) return 0;
+    if (sv[start + 4] != '-' || sv[start + 7] != '-' ||
+        (sv[start + 10] != 'T' && sv[start + 10] != 't' && sv[start + 10] != ' ') ||
+        sv[start + 13] != ':' || sv[start + 16] != ':') {
+        return 0;
+    }
+    std::size_t pos = start + 19;
+    if (pos < sv.size() && (sv[pos] == '.' || sv[pos] == ',')) {
+        ++pos;
+        std::size_t frac = 0;
+        while (pos < sv.size() && sv[pos] >= '0' && sv[pos] <= '9') {
+            ++pos;
+            ++frac;
+        }
+        if (frac == 0 || frac > 9) return 0;
+    }
+    if (pos >= sv.size()) return 0;
+    if (sv[pos] == 'Z' || sv[pos] == 'z') {
+        ++pos;
+        return pos;
+    }
+    if (sv[pos] == '+' || sv[pos] == '-') {
+        ++pos;
+        if (pos + 2 > sv.size()) return 0;
+        pos += 2;
+        if (pos < sv.size() && sv[pos] == ':') ++pos;
+        if (pos + 2 <= sv.size() && sv[pos] >= '0' && sv[pos] <= '9' &&
+            sv[pos + 1] >= '0' && sv[pos + 1] <= '9') {
+            pos += 2;
+        }
+        return pos;
+    }
+    return 0;
+}
+
+} // namespace hxlings::detail
+
+export namespace hxlings {
+
+std::optional<std::int64_t> ParseTimestampToEpochSeconds(std::string_view raw) {
+    const std::string trimmed = detail::TrimCopy(raw);
+    if (trimmed.empty()) return std::nullopt;
+
+    bool has_zone = false;
+    if (const auto iso = detail::TryParseIsoTimestamp(trimmed, has_zone); iso.has_value() && has_zone) {
+        return iso;
+    }
+
+    if (trimmed.size() == 10 || trimmed.size() == 13 || trimmed.size() == 16 || trimmed.size() == 19) {
+        for (const unsigned char ch : trimmed) {
+            if (ch < '0' || ch > '9') return std::nullopt;
+        }
+        std::int64_t val = 0;
+        const auto [ptr, ec] = std::from_chars(trimmed.data(), trimmed.data() + trimmed.size(), val);
+        if (ec != std::errc{} || ptr != trimmed.data() + trimmed.size()) return std::nullopt;
+        if (trimmed.size() == 10) return val;
+        if (trimmed.size() == 13) return val / 1000LL;
+        if (trimmed.size() == 16) return val / 1000000LL;
+        return val / 1000000000LL;
+    }
+    return std::nullopt;
+}
+
+bool IsIsoTimestampWithZone(std::string_view raw) {
+    const std::string trimmed = detail::TrimCopy(raw);
+    bool has_zone = false;
+    return detail::TryParseIsoTimestamp(trimmed, has_zone).has_value() && has_zone;
+}
+
+std::string FormatEpochWithOffsetMinutes(std::int64_t epoch_seconds, int offset_minutes) {
+    const std::int64_t shifted = epoch_seconds + static_cast<std::int64_t>(offset_minutes) * 60LL;
+    std::int64_t day_count = shifted / 86400LL;
+    std::int64_t rem = shifted % 86400LL;
+    if (rem < 0) {
+        rem += 86400LL;
+        --day_count;
+    }
+    const std::chrono::year_month_day ymd{std::chrono::sys_days{std::chrono::days{day_count}}};
+    const int hh = static_cast<int>(rem / 3600LL);
+    const int mm = static_cast<int>((rem % 3600LL) / 60LL);
+    const int ss = static_cast<int>(rem % 60LL);
+    return std::format(
+        "{:04d}-{:02d}-{:02d} {:02d}:{:02d}:{:02d}",
+        static_cast<int>(ymd.year()),
+        static_cast<unsigned>(ymd.month()),
+        static_cast<unsigned>(ymd.day()),
+        hh,
+        mm,
+        ss
+    );
+}
+
+std::string FormatLocalTimestamp(std::string_view raw) {
+    const std::string trimmed = detail::TrimCopy(raw);
+    const auto epoch = ParseTimestampToEpochSeconds(trimmed);
+    if (!epoch.has_value()) return trimmed;
+
+    const std::time_t tt = static_cast<std::time_t>(*epoch);
+    static std::mutex localtime_mu;
+    std::tm local_tm{};
+    {
+        std::lock_guard lock(localtime_mu);
+        if (const std::tm* ptm = std::localtime(&tt)) {
+            local_tm = *ptm;
+        } else {
+            return FormatEpochWithOffsetMinutes(*epoch, 0);
+        }
+    }
+    return std::format(
+        "{:04d}-{:02d}-{:02d} {:02d}:{:02d}:{:02d}",
+        local_tm.tm_year + 1900,
+        local_tm.tm_mon + 1,
+        local_tm.tm_mday,
+        local_tm.tm_hour,
+        local_tm.tm_min,
+        local_tm.tm_sec
+    );
+}
+
+std::string FormatTimestampsInText(std::string_view text) {
+    std::string out;
+    out.reserve(text.size());
+    std::size_t i = 0;
+    while (i < text.size()) {
+        const std::size_t end_pos = detail::MatchIsoTimestampPrefixEnd(text, i);
+        if (end_pos > i) {
+            const std::string_view candidate = text.substr(i, end_pos - i);
+            if (IsIsoTimestampWithZone(candidate)) {
+                out += FormatLocalTimestamp(candidate);
+                i = end_pos;
+                continue;
+            }
+        }
+        out.push_back(text[i]);
+        ++i;
+    }
+    return out;
+}
+
+} // namespace hxlings

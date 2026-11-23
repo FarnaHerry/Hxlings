@@ -3,6 +3,7 @@ export module hxlings.page.subos;
 import std;
 import huxerui;
 import xlings.types;
+import xlings.parser;
 import hxlings.theme;
 import hxlings.icons;
 import hxlings.store;
@@ -670,11 +671,15 @@ View SubosPolicyTabView(
                             .Style(TextStyle{.font = Font::Monospace(12.5F).WithWeight(FontWeight::SemiBold)})
                             .With(Grow(1.0F)),
                     }.With(Spacing(6.0F), CrossAlign(CrossAxisAlignment::Center)),
-                    r.detail.empty()
+                    (r.detail.empty() && r.requested_at.empty())
                         ? View{}
-                        : Text(r.detail, TextRole::Label)
-                              .Style(TextStyle{.foreground = theme.colors.on_surface_variant})
-                              .With(Grow(1.0F)),
+                        : Text(
+                              (r.requested_at.empty() ? std::string{} : FormatLocalTimestamp(r.requested_at)) +
+                                  (!r.requested_at.empty() && !r.detail.empty() ? " · " : "") +
+                                  r.detail,
+                              TextRole::Label
+                          ).Style(TextStyle{.foreground = theme.colors.on_surface_variant})
+                             .With(Grow(1.0F)),
                 }.With(Spacing(4.0F), Grow(1.0F), CrossAlign(CrossAxisAlignment::Stretch)),
                 Flow {
                     ActionButton(
@@ -924,7 +929,7 @@ View SubosSessionsTabView(
                     }.With(Spacing(6.0F), CrossAlign(CrossAxisAlignment::Center)),
                     Text(
                         "PID: " + std::to_string(s.pid) +
-                            (s.started.empty() ? "" : (" · 启动: " + s.started)) +
+                            (s.started.empty() ? "" : (" · 启动: " + FormatLocalTimestamp(s.started))) +
                             (s.command.empty() ? "" : (" · " + s.command)),
                         TextRole::Label
                     ).Style(TextStyle{.foreground = theme.colors.on_surface_variant})
@@ -989,7 +994,8 @@ View SubosSessionsTabView(
                         StatusBadge(std::to_string(rs.duration_ms) + " ms", sp.info, sp.info_bg),
                     }.With(Spacing(6.0F), CrossAlign(CrossAxisAlignment::Center)),
                     Text(
-                        "命令: " + std::to_string(rs.commands) +
+                        (rs.started.empty() ? std::string{} : ("开始: " + FormatLocalTimestamp(rs.started) + " · ")) +
+                            "命令: " + std::to_string(rs.commands) +
                             " · 执行: " + std::to_string(rs.executions) +
                             " · 拒绝: " + std::to_string(rs.denied.size()) +
                             " · 变更文件: " + std::to_string(rs.changed.size()),
@@ -1434,7 +1440,7 @@ View SubosPage() {
                     Column {
                         Row {
                             ev.kind.empty() ? View{} : StatusBadge(ev.kind, sp.info, sp.info_bg),
-                            Text(ev.timestamp.empty() ? ev.session : ev.timestamp, TextRole::Label)
+                            Text(ev.timestamp.empty() ? ev.session : FormatLocalTimestamp(ev.timestamp), TextRole::Label)
                                 .Style(TextStyle{.font = Font::Monospace(11.5F), .foreground = theme.colors.on_surface_variant}),
                         }.With(Spacing(8.0F), CrossAlign(CrossAxisAlignment::Center)),
                         Text(ev.summary, TextRole::Body)

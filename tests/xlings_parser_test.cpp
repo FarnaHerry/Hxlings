@@ -675,6 +675,45 @@ void TestSubosGovernanceAndFormatParsers() {
           "rollback list error+hint formatted");
 }
 
+void TestTimestampParsingAndFormatting() {
+    const auto utc_ep = ParseTimestampToEpochSeconds("2026-11-23T01:21:48Z");
+    const auto frac_ep = ParseTimestampToEpochSeconds("2026-11-23T01:21:48.987Z");
+    const auto plus8_ep = ParseTimestampToEpochSeconds("2026-11-23T09:21:48+08:00");
+    const auto minus5_ep = ParseTimestampToEpochSeconds("2026-11-22T20:21:48-05:00");
+    Check(utc_ep.has_value(), "ISO UTC timestamp parsed");
+    Check(frac_ep == utc_ep, "fractional seconds timestamp parsed");
+    Check(plus8_ep == utc_ep, "+08:00 timestamp equals UTC epoch");
+    Check(minus5_ep == utc_ep, "-05:00 timestamp equals UTC epoch");
+
+    const std::string ep_sec_str = std::to_string(*utc_ep);
+    const std::string ep_ms_str = ep_sec_str + "123";
+    Check(ParseTimestampToEpochSeconds(ep_sec_str) == utc_ep, "10-digit Unix seconds parsed");
+    Check(ParseTimestampToEpochSeconds(ep_ms_str) == utc_ep, "13-digit Unix ms parsed");
+
+    Check(FormatEpochWithOffsetMinutes(*utc_ep, 480) == "2026-11-23 09:21:48", "+08:00 formatted deterministically");
+    Check(FormatEpochWithOffsetMinutes(*utc_ep, 0) == "2026-11-23 01:21:48", "UTC formatted deterministically");
+    Check(FormatEpochWithOffsetMinutes(*utc_ep, -300) == "2026-11-22 20:21:48", "-05:00 formatted deterministically");
+
+    const std::string local_iso = FormatLocalTimestamp("2026-11-23T01:21:48Z");
+    const std::string local_epoch = FormatLocalTimestamp(ep_sec_str);
+    Check(local_iso.size() == 19 && local_iso[10] == ' ' && local_iso.find('T') == std::string::npos &&
+              local_iso.find('Z') == std::string::npos,
+          "local timestamp formatted as YYYY-MM-DD HH:MM:SS");
+    Check(local_iso == local_epoch, "ISO UTC and Unix epoch yield identical local formatting");
+    Check(FormatLocalTimestamp(local_iso) == local_iso, "already-formatted local timestamp is idempotent");
+
+    Check(IsIsoTimestampWithZone("2026-11-23T01:21:48Z"), "ISO UTC detected as zoned timestamp");
+    Check(!IsIsoTimestampWithZone("2026-11-23 09:21:48"), "naive local string not re-converted");
+    Check(!ParseTimestampToEpochSeconds("2026.11.22.1").has_value(), "version string rejected as timestamp");
+    Check(FormatLocalTimestamp("2026.11.22.1") == "2026.11.22.1", "version string preserved unchanged");
+    Check(FormatLocalTimestamp("2026-11-23") == "2026-11-23", "date-only string preserved unchanged");
+    Check(FormatLocalTimestamp("115") == "115", "short integer preserved unchanged");
+    Check(FormatLocalTimestamp("session-1") == "session-1", "session identifier preserved unchanged");
+
+    const std::string embedded = FormatTimestampsInText("created 2026-11-23T01:21:48Z (ok)");
+    Check(embedded == ("created " + local_iso + " (ok)"), "embedded ISO UTC timestamp replaced in free text");
+}
+
 int main() {
     TestSplitPackageSpec();
     TestNdjsonAndEnv();
@@ -694,6 +733,7 @@ int main() {
     TestExternalUrlValidationAndNormalization();
     TestConfigExtensionsAndNetworkParsers();
     TestSubosGovernanceAndFormatParsers();
+    TestTimestampParsingAndFormatting();
 
     if (failures == 0) {
         std::println("All parser and xlings integration tests passed.");

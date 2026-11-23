@@ -1168,6 +1168,16 @@ void AuditAllPagesAtViewport(
                              store->last_opened_url.Get() + "')");
             }
         }
+        auto mcpp_link_q = scroll_q.ScrollUntil(UiSelector::Key("about-link-mcpp"));
+        ui.Pump();
+        if (SafeTap(ctx, vp_tag + " / SettingsAboutMcppLink", mcpp_link_q, "about-link-mcpp")) {
+            ui.Pump();
+            if (store->last_opened_url.Get() != "https://github.com/mcpp-community/mcpp") {
+                ctx.Flag(vp_tag + " / SettingsAboutMcppLink",
+                         "Clicking about-link-mcpp did not record mcpp GitHub URL (got '" +
+                             store->last_opened_url.Get() + "')");
+            }
+        }
         scroll_q.ScrollBy({0.0F, -2000.0F});
         ui.Pump();
     } catch (const UiTestFailure& ex) {

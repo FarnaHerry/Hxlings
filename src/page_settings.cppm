@@ -5,6 +5,7 @@ import mcpplibs.os;
 import huxerui;
 import app.resources;
 import xlings.types;
+import xlings.parser;
 import hxlings.theme;
 import hxlings.icons;
 import hxlings.shortcuts;
@@ -698,7 +699,7 @@ View SettingsPage() {
         profile_rows.push_back(
             Row {
                 StatusBadge("Gen " + p.id, sp.info, sp.info_bg),
-                Text(p.summary.empty() ? p.raw_line : p.summary, TextRole::Body)
+                Text(FormatTimestampsInText(p.summary.empty() ? p.raw_line : p.summary), TextRole::Body)
                     .Style(TextStyle{.font = Font::Monospace(12.5F), .foreground = theme.colors.on_surface})
                     .With(Grow(1.0F)),
                 ActionButton(
@@ -1041,6 +1042,7 @@ View SettingsPage() {
             KeyValueRow("Hxlings 仓库", "https://github.com/FarnaHerry/Hxlings", true, true, "about-link-hxlings"),
             KeyValueRow("HuxerUI 官方", "https://github.com/HuxerUI/HuxerUI", true, true, "about-link-huxerui"),
             KeyValueRow("xlings 官方", "https://github.com/openxlings/xlings", true, true, "about-link-xlings"),
+            KeyValueRow("mcpp 官方", "https://github.com/mcpp-community/mcpp", true, true, "about-link-mcpp"),
         }.With(Spacing(12.0F), CrossAlign(CrossAxisAlignment::Stretch))
     ).Key("settings-about-card");
 

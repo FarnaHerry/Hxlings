@@ -241,7 +241,7 @@ View IndexesPage() {
                     s.current ? StatusBadge("当前使用", sp.success, sp.success_bg) : View{},
                     s.installed ? StatusBadge("已本地缓存", sp.info, sp.info_bg) : View{},
                     is_pinned ? StatusBadge("已固定", sp.warning, sp.warning_bg) : View{},
-                    Text(s.generated_at, TextRole::Label)
+                    Text(FormatLocalTimestamp(s.generated_at), TextRole::Label)
                         .Style(TextStyle{.font = Font::Monospace(11.5F),
                                          .foreground = theme.colors.on_surface_variant})
                         .With(Grow(1.0F)),

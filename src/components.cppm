@@ -3,6 +3,7 @@ export module hxlings.components;
 import std;
 import huxerui;
 import xlings.process;
+import xlings.parser;
 import hxlings.theme;
 import hxlings.icons;
 import hxlings.shortcuts;
@@ -311,10 +312,14 @@ View KeyValueRow(
     const Font val_font = monospace
                               ? Font::Monospace(12.5F)
                               : Font::System(13.0F).WithWeight(highlight ? FontWeight::SemiBold : FontWeight::Regular);
-    View value_view = IsSafeExternalUrl(value)
+    const bool is_url = IsSafeExternalUrl(value);
+    const std::string display_val = (!is_url && IsIsoTimestampWithZone(value))
+                                        ? FormatLocalTimestamp(value)
+                                        : value;
+    View value_view = is_url
                           ? ExternalLinkRow(std::move(value), std::move(link_key)).With(Grow(1.0F))
                           : SelectionArea(
-                                Text(value.empty() ? std::string("—") : std::move(value), TextRole::Body)
+                                Text(display_val.empty() ? std::string("—") : display_val, TextRole::Body)
                                     .Style(TextStyle{
                                         .font = val_font,
                                         .foreground = highlight ? theme.colors.primary : theme.colors.on_surface,
