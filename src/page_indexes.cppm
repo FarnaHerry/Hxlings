@@ -151,12 +151,8 @@ View IndexesPage() {
                                              .foreground = theme.colors.on_surface}),
                         StatusBadge(r.scope.empty() ? std::string("global") : r.scope, sp.info, sp.info_bg),
                     }.With(Spacing(8.0F), CrossAlign(CrossAxisAlignment::Center)),
-                    SelectionArea(
-                        Text(r.url, TextRole::Label)
-                            .Style(TextStyle{.font = Font::Monospace(12.0F),
-                                             .foreground = theme.colors.on_surface_variant})
-                    ),
-                }.With(Spacing(4.0F), Grow(1.0F)),
+                    ExternalLinkRow(r.url, "repo-link-" + r.name),
+                }.With(Spacing(4.0F), Grow(1.0F), CrossAlign(CrossAxisAlignment::Stretch)),
                 ActionButton(
                     "同步索引",
                     ButtonTone::Secondary,
@@ -362,7 +358,9 @@ View IndexesPage() {
         Column {
             SectionHeader(
                 "本地 xpkg 配方 (" + std::to_string(local_xpkgs.size()) + ")",
-                "通过 `xlings config --add-xpkg` 注册的本地 Lua 包配方",
+                "通过 `xlings config --add-xpkg` 注册的本地 Lua 包配方"
+            ),
+            Flow {
                 ActionButton(
                     "添加本地 xpkg",
                     ButtonTone::Primary,
@@ -374,8 +372,33 @@ View IndexesPage() {
                     true,
                     icons::PlusIcon(),
                     true
-                )
-            ),
+                ),
+                ActionButton(
+                    "清理过期配方",
+                    ButtonTone::Secondary,
+                    [store, tasks, toast] { store->ClearLocalXpkgsAsync(tasks, toast, "stale"); },
+                    !local_xpkgs.empty(),
+                    icons::WrenchIcon(),
+                    true
+                ),
+                ActionButton(
+                    "清空全部配方",
+                    ButtonTone::Danger,
+                    [dialog, store, tasks, toast] {
+                        dialog.Show(
+                            "清空全部本地 xpkg 配方",
+                            "确定执行 `xlings config --clear-xpkg all` 移除所有已注册的本地配方吗？",
+                            "全部清空",
+                            "取消",
+                            [store, tasks, toast] { store->ClearLocalXpkgsAsync(tasks, toast, "all"); },
+                            {}
+                        );
+                    },
+                    !local_xpkgs.empty(),
+                    icons::TrashIcon(),
+                    true
+                ),
+            }.With(Spacing(8.0F)),
             xpkg_rows.empty()
                 ? Text("尚未注册本地 xpkg 配方", TextRole::Body)
                       .Style(TextStyle{.foreground = theme.colors.on_surface_variant})

@@ -48,3 +48,8 @@ description: >-
 2. 若涉及客户端设置序列化（`src/app_settings.cppm`），同步在 `TestAppSettingsSerializationAndPersistence` 覆盖合法/非法/边界与临时目录读写。
 3. 验证命令：
    `mcpp test`（确认 `xlings_parser_test ... ok`）。
+
+## Extended Governance & Process Notes (v0.1.5+)
+
+- **Global Flags vs `xlings subos`**: `xlings --yes --agent subos ...` rejects `subos` as unknown. For interactive/mutating SubOS commands prefer `xlings interface subos_command --args '{"argv":[...],"yes":true}'`, and for machine-readable queries invoke `xlings subos status|config|doctor|ps|requests|report --json ...` directly without prefix flags.
+- **External Browser Links**: Validate URLs via `IsSafeExternalUrl` / `NormalizeBrowserUrl` and launch through `XlingsStore::OpenUrl` (which records `last_opened_url` and short-circuits spawning when `skip_initial_refresh` is active during headless UI tests).

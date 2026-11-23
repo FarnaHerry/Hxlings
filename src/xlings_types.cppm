@@ -218,6 +218,8 @@ struct ConfigSnapshot {
     std::string ui_mode;
     std::string theme;
     std::string interactive;
+    std::string default_runtime;
+    std::vector<std::string> archive_dirs;
     std::string raw_text;
 
     bool operator==(const ConfigSnapshot&) const = default;
@@ -338,6 +340,180 @@ struct SearchOutcome {
     std::string error_message;
 
     bool operator==(const SearchOutcome&) const = default;
+};
+
+struct NetworkEndpoint {
+    std::string region;
+    std::string resource;
+    std::string url;
+
+    bool operator==(const NetworkEndpoint&) const = default;
+};
+
+struct NetworkProbeResult {
+    std::string url;
+    std::string host;
+    std::string status;
+    bool reachable = false;
+    int http_status = 0;
+    double elapsed_seconds = 0.0;
+    bool proxy = false;
+    bool ok = false;
+    std::string error_message;
+
+    bool operator==(const NetworkProbeResult&) const = default;
+};
+
+struct ConfigThemeItem {
+    std::string name;
+    std::string source;
+    bool active = false;
+
+    bool operator==(const ConfigThemeItem&) const = default;
+};
+
+struct SubosGateStatus {
+    std::string gate;
+    bool enforced = false;
+    std::string reason;
+    std::string route;
+    bool supported = false;
+
+    bool operator==(const SubosGateStatus&) const = default;
+};
+
+struct SubosPolicySnapshot {
+    std::string extends;
+    std::string source;
+    std::string identity;
+    std::string net;
+    std::string proxy;
+    bool disable_user_ns = false;
+    bool no_degrade = false;
+    std::string observe_level;
+    std::string fetch_default;
+    std::string index_update;
+    std::vector<std::string> grants;
+    std::vector<std::string> grants_allowed;
+    std::vector<std::string> env_pass;
+    std::vector<std::string> mounts;
+
+    bool operator==(const SubosPolicySnapshot&) const = default;
+};
+
+struct SubosStatusSnapshot {
+    std::string instance;
+    std::string policy_source;
+    bool enters = false;
+    std::string backend;
+    std::vector<SubosGateStatus> gates;
+    SubosPolicySnapshot requested;
+    std::string raw_json;
+
+    bool operator==(const SubosStatusSnapshot&) const = default;
+};
+
+struct SubosDoctorFinding {
+    std::string instance;
+    std::string check;
+    std::string level;
+    std::string detail;
+    std::string fix;
+
+    bool operator==(const SubosDoctorFinding&) const = default;
+};
+
+struct SubosDoctorSnapshot {
+    int errors = 0;
+    std::vector<SubosGateStatus> gates;
+    std::vector<SubosDoctorFinding> findings;
+    std::string raw_json;
+
+    bool operator==(const SubosDoctorSnapshot&) const = default;
+};
+
+struct SubosSessionItem {
+    std::string id;
+    std::string instance;
+    std::string backend;
+    std::string started;
+    std::string state;
+    int pid = 0;
+    std::string command;
+    std::string raw_json;
+
+    bool operator==(const SubosSessionItem&) const = default;
+};
+
+struct SubosRequestItem {
+    std::string id;
+    std::string instance;
+    std::string kind;
+    std::string resource;
+    std::string detail;
+    std::string state;
+    std::string requested_at;
+    std::string raw_json;
+
+    bool operator==(const SubosRequestItem&) const = default;
+};
+
+struct SubosReportSession {
+    std::string id;
+    std::string backend;
+    std::string started;
+    int commands = 0;
+    int executions = 0;
+    int exit_code = 0;
+    std::uint64_t duration_ms = 0;
+    std::vector<std::string> denied;
+    std::vector<std::string> changed;
+    std::vector<std::string> programs;
+
+    bool operator==(const SubosReportSession&) const = default;
+};
+
+struct SubosReportSnapshot {
+    std::string instance;
+    std::vector<std::string> policy_changes;
+    std::vector<SubosReportSession> sessions;
+    std::string raw_json;
+
+    bool operator==(const SubosReportSnapshot&) const = default;
+};
+
+struct SubosCreateOptions {
+    std::string name;
+    std::string from_subos;
+    std::string sandbox;
+    std::string runtime;
+    std::string abi;
+    std::string storage;
+    std::string proxy;
+    bool rootfs = false;
+    bool dry_run = false;
+
+    bool operator==(const SubosCreateOptions&) const = default;
+};
+
+struct SubosPolicyPatch {
+    std::string sandbox;
+    std::string net;
+    std::string proxy;
+    bool clear_proxy = false;
+    std::string fetch_default;
+    std::string index_update;
+    std::string observe_level;
+    std::string allow_cap;
+    std::string disallow_cap;
+    std::string env_pass_csv;
+    std::string mount_spec;
+    std::string unmount_spec;
+    std::optional<bool> no_degrade;
+    bool policy_upgrade = false;
+    bool reset = false;
+
+    bool operator==(const SubosPolicyPatch&) const = default;
 };
 
 } // namespace hxlings

@@ -2,9 +2,11 @@ export module hxlings.components;
 
 import std;
 import huxerui;
+import xlings.process;
 import hxlings.theme;
 import hxlings.icons;
 import hxlings.shortcuts;
+import hxlings.store;
 
 using namespace huxerui;
 
@@ -233,16 +235,91 @@ View SectionHeader(std::string title, std::string subtitle = {}, View trailing =
 }
 
 [[huxerui::composable]]
+View ExternalLinkRow(
+    std::string url,
+    std::string link_key = {}
+) {
+    const auto store = UseService<XlingsStore>();
+    const ToastHandle toast = UseToast();
+    const ApplicationHandle app = UseApplication();
+    const auto clipboard = app.Clipboard();
+    const ThemeSpec& theme = UseTheme();
+
+    const std::string normalized = NormalizeBrowserUrl(url);
+    const std::string target = normalized.empty() ? std::move(url) : normalized;
+    const bool valid = !normalized.empty();
+
+    View link_btn = Row {
+        Image(icons::ExternalLinkIcon())
+            .Fit(ImageFit::Contain)
+            .Tint(valid ? theme.colors.primary : theme.colors.on_surface_variant)
+            .With(Frame{.width = 14.0F, .height = 14.0F}),
+        Text(target.empty() ? std::string("—") : target, TextRole::Body)
+            .Style(TextStyle{
+                .font = Font::Monospace(12.5F),
+                .foreground = valid ? theme.colors.primary : theme.colors.on_surface,
+            })
+            .With(Grow(1.0F)),
+    }.With(
+        Grow(1.0F),
+        Spacing(6.0F),
+        CrossAlign(CrossAxisAlignment::Center),
+        Padding(EdgeInsets::Symmetric(6.0F, 3.0F)),
+        CornerRadius(6.0F),
+        Indication{
+            .hover = IndicationLayer{.fill = WithAlpha(theme.colors.primary, 0.10F)},
+            .press = IndicationLayer{.fill = WithAlpha(theme.colors.primary, 0.18F)},
+        },
+        Focusable(valid),
+        Enabled(valid),
+        PointerCursor(valid ? PointerCursorKind::Hand : PointerCursorKind::Default),
+        Semantics{.role = SemanticRole::Button, .label = "打开链接 " + target}
+    ).OnClick([store, toast, target] {
+        store->OpenUrl(toast, target);
+    });
+    if (!link_key.empty()) {
+        link_btn = std::move(link_btn).Key(std::move(link_key));
+    }
+
+    View copy_btn = ActionButton(
+        "",
+        ButtonTone::Ghost,
+        [clipboard, toast, target] {
+            const bool copied = clipboard && clipboard->SupportsSynchronousText() && clipboard->WriteText(target);
+            toast.Show(copied ? "已复制链接" : "复制到剪贴板失败");
+        },
+        !target.empty(),
+        icons::CopyIcon(),
+        true
+    );
+
+    return Row {
+        std::move(link_btn),
+        std::move(copy_btn),
+    }.With(Spacing(4.0F), CrossAlign(CrossAxisAlignment::Center));
+}
+
+[[huxerui::composable]]
 View KeyValueRow(
     std::string label,
     std::string value,
     bool highlight = false,
-    bool monospace = false
+    bool monospace = false,
+    std::string link_key = {}
 ) {
     const ThemeSpec& theme = UseTheme();
     const Font val_font = monospace
                               ? Font::Monospace(12.5F)
                               : Font::System(13.0F).WithWeight(highlight ? FontWeight::SemiBold : FontWeight::Regular);
+    View value_view = IsSafeExternalUrl(value)
+                          ? ExternalLinkRow(std::move(value), std::move(link_key)).With(Grow(1.0F))
+                          : SelectionArea(
+                                Text(value.empty() ? std::string("—") : std::move(value), TextRole::Body)
+                                    .Style(TextStyle{
+                                        .font = val_font,
+                                        .foreground = highlight ? theme.colors.primary : theme.colors.on_surface,
+                                    })
+                            ).With(Grow(1.0F));
     return Row {
         Text(std::move(label), TextRole::Label)
             .Style(TextStyle{
@@ -250,13 +327,7 @@ View KeyValueRow(
                 .foreground = theme.colors.on_surface_variant,
             })
             .With(Frame{.width = 140.0F}),
-        SelectionArea(
-            Text(value.empty() ? std::string("—") : std::move(value), TextRole::Body)
-                .Style(TextStyle{
-                    .font = val_font,
-                    .foreground = highlight ? theme.colors.primary : theme.colors.on_surface,
-                })
-        ).With(Grow(1.0F)),
+        std::move(value_view),
     }.With(Spacing(12.0F), Padding(EdgeInsets::Symmetric(0.0F, 4.0F)), CrossAlign(CrossAxisAlignment::Start));
 }
 

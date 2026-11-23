@@ -555,6 +555,126 @@ void TestWindowsProcessHelpersAndSpawn() {
 
 } // namespace
 
+void TestExternalUrlValidationAndNormalization() {
+    Check(IsSafeExternalUrl("https://github.com/FarnaHerry/Hxlings"), "https url valid");
+    Check(IsSafeExternalUrl("HTTP://Example.com/docs?q=1#top"), "http uppercase scheme valid");
+    Check(NormalizeBrowserUrl("  HTTPS://GitHub.com/HuxerUI/HuxerUI  ") ==
+              "https://GitHub.com/HuxerUI/HuxerUI",
+          "trimmed and lowercased scheme");
+    Check(!IsSafeExternalUrl(""), "empty url rejected");
+    Check(!IsSafeExternalUrl("javascript:alert(1)"), "javascript scheme rejected");
+    Check(!IsSafeExternalUrl("file:///etc/passwd"), "file scheme rejected");
+    Check(!IsSafeExternalUrl("https://github.com/a b"), "whitespace rejected");
+    Check(!IsSafeExternalUrl("https://\"quoted\""), "quotes rejected");
+    Check(!IsSafeExternalUrl("https:///nohost"), "missing host rejected");
+}
+
+void TestConfigExtensionsAndNetworkParsers() {
+    const std::string cfg_txt = R"(xlings config
+  XLINGS_HOME: /tmp/xhome
+  XLINGS_DATA: /tmp/xhome/data
+  XLINGS_SUBOS: /tmp/xhome/subos/default
+  当前子系统: default
+  镜像: CN
+  主题: tokyo-night
+  默认运行时: glibc@2.44.3
+  归档目录: /tmp/arc1, /tmp/arc2
+)";
+    const auto cfg = ParseConfigText(cfg_txt);
+    Check(cfg.theme == "tokyo-night", "config theme parsed");
+    Check(cfg.default_runtime == "glibc@2.44.3", "config default runtime parsed");
+    Check(cfg.archive_dirs.size() == 2 && cfg.archive_dirs[0] == "/tmp/arc1" && cfg.archive_dirs[1] == "/tmp/arc2",
+          "config archive dirs parsed");
+
+    const std::string theme_txt = R"(themes:
+  default            (built in)
+  tokyo-night        @xlings/config/themes/tokyo-night.json
+  sakura             @xlings/config/themes/sakura.json
+
+  active: tokyo-night
+  to customise: copy a file
+)";
+    const auto themes = ParseConfigThemeList(theme_txt);
+    Check(themes.size() == 3, "3 themes parsed");
+    Check(!themes[0].active && themes[1].active && themes[1].name == "tokyo-night", "active theme marked");
+
+    const auto ep_evs = ParseNdjsonLines(
+        R"({"dataKind":"network_endpoints","kind":"data","payload":{"endpoints":[{"region":"GLOBAL","resource":"xim","url":"https://raw.githubusercontent.com/openxlings/xim-pkgindex/main"},{"region":"CN","resource":"xim","url":"https://raw.gitcode.com/sunrisepeak/xim-pkgindex/raw/main"}]}})"
+    );
+    const auto eps = ParseNetworkEndpointsEvents(ep_evs);
+    Check(eps.size() == 2 && eps[0].region == "GLOBAL" && eps[1].region == "CN", "network endpoints parsed");
+
+    const auto probe_evs = ParseNdjsonLines(
+        R"({"dataKind":"network_probe","kind":"data","payload":{"elapsed_seconds":0.215,"host":"raw.gitcode.com","http_status":200,"proxy":false,"reachable":true,"status":"reachable"}})"
+    );
+    const auto probe = ParseNetworkProbeEvents(probe_evs, "https://raw.gitcode.com/test");
+    Check(probe.ok && probe.reachable && probe.http_status == 200 && probe.host == "raw.gitcode.com",
+          "network probe parsed");
+}
+
+void TestSubosGovernanceAndFormatParsers() {
+    const std::string status_json = R"({
+  "instance": "dev",
+  "policy_source": "@xlings/config/policies/dev.json",
+  "effective": {
+    "enters": true,
+    "spec": {"backend": "bwrap"},
+    "gates": [{"gate": "userns", "enforced": true, "supported": true, "route": "unprivileged", "reason": "ok"}]
+  },
+  "requested": {
+    "extends": "dev",
+    "isolation": {"disable_userns": false, "net": "nat", "proxy": "socks5h://127.0.0.1:1080", "no_degrade": true, "env_pass": ["TERM"]},
+    "observe": {"level": "standard"},
+    "permissions": {"fetch": {"default": "ask"}, "index_update": "auto"}
+  }
+})";
+    const auto st = ParseSubosStatusJson(status_json);
+    Check(st.instance == "dev" && st.enters && st.backend == "bwrap", "subos status parsed");
+    Check(st.gates.size() == 1 && st.gates[0].enforced && st.gates[0].gate == "userns", "subos gates parsed");
+    Check(st.requested.net == "nat" && st.requested.no_degrade && st.requested.index_update == "auto",
+          "subos requested policy parsed");
+
+    const std::string cfg_json = R"({"extends":"private","source":"inline","isolation":{"net":"none","grants":["display"],"env_pass":["HOME"]},"mounts":["/tmp:/tmp:ro"],"observe":{"level":"full"},"permissions":{"fetch":{"default":"deny"},"index_update":"deny"}})";
+    const auto pol = ParseSubosConfigJson(cfg_json);
+    Check(pol.extends == "private" && pol.net == "none" && pol.mounts.size() == 1 && pol.observe_level == "full" &&
+              pol.index_update == "deny",
+          "subos config json parsed");
+
+    const std::string doc_json = R"({"errors":1,"gates":[],"instances":[{"instance":"dev","findings":[{"check":"sandbox","level":"error","detail":"bwrap missing","fix":"xlings install bwrap"}]}]})";
+    const auto doc = ParseSubosDoctorJson(doc_json);
+    Check(doc.errors == 1 && doc.findings.size() == 1 && doc.findings[0].check == "sandbox", "subos doctor parsed");
+
+    const auto ps = ParseSubosPsJson(R"({"id":"s-1","instance":"dev","backend":"bwrap","pid":1234,"state":"running","started":"2026-11-23T00:00:00Z","command":["bash"]})");
+    Check(ps.size() == 1 && ps[0].id == "s-1" && ps[0].pid == 1234 && ps[0].command == "bash", "subos ps parsed");
+    Check(ParseSubosPsJson("[xlings] no running sessions\n").empty(), "empty ps banner returns empty");
+
+    const auto reqs = ParseSubosRequestsJson(R"({"id":"r-9","instance":"dev","kind":"pkg","resource":"xim:cmake","detail":"needs cmake","state":"pending"})");
+    Check(reqs.size() == 1 && reqs[0].id == "r-9" && reqs[0].resource == "xim:cmake", "subos requests parsed");
+
+    const std::string rep_json = R"({"instance":"dev","policy_changes":["net=nat"],"sessions":[{"id":"rep-1","backend":"bwrap","started":"2026-11-23","commands":3,"executions":2,"exit":0,"ms":420,"denied":["curl"],"changed":["/etc/hosts"],"programs":["cmake"]}]})";
+    const auto rep = ParseSubosReportJson(rep_json);
+    Check(rep.instance == "dev" && rep.policy_changes.size() == 1 && rep.sessions.size() == 1 &&
+              rep.sessions[0].duration_ms == 420 && rep.sessions[0].commands == 3,
+          "subos report parsed");
+
+    const auto info_evs = ParseNdjsonLines(
+        R"({"dataKind":"info_panel","kind":"data","payload":{"title":"default","fields":[{"label":"active","value":"yes","highlight":true}],"extra_fields":[{"label":"vendors","value":"NONE","alert":true}]}})"
+    );
+    const std::string info_fmt = FormatNdjsonInfoPanel(info_evs);
+    Check(info_fmt.find("=== default ===") != std::string::npos && info_fmt.find("[!] vendors: NONE") != std::string::npos,
+          "info_panel formatted with alerts");
+
+    const auto diff_evs = ParseNdjsonLines(R"({"dataKind":"subos_diff","kind":"data","payload":[]})");
+    Check(FormatSubosDiffEvents(diff_evs).find("一致") != std::string::npos, "empty diff formatted");
+
+    const auto rb_evs = ParseNdjsonLines(
+        R"({"code":"E_INVALID_INPUT","hint":"xlings use <pkg> --subos default","kind":"error","message":"no root generations"})"
+    );
+    const std::string rb_fmt = FormatSubosRollbackListEvents(rb_evs);
+    Check(rb_fmt.find("no root generations") != std::string::npos && rb_fmt.find("提示: xlings use") != std::string::npos,
+          "rollback list error+hint formatted");
+}
+
 int main() {
     TestSplitPackageSpec();
     TestNdjsonAndEnv();
@@ -571,6 +691,9 @@ int main() {
     TestAppSettingsSerializationAndPersistence();
     TestBundledResourcesAndChildEnvSanitization();
     TestWindowsProcessHelpersAndSpawn();
+    TestExternalUrlValidationAndNormalization();
+    TestConfigExtensionsAndNetworkParsers();
+    TestSubosGovernanceAndFormatParsers();
 
     if (failures == 0) {
         std::println("All parser and xlings integration tests passed.");

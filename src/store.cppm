@@ -139,6 +139,27 @@ public:
     State<bool> profiles_loaded{false};
     State<std::string> doctor_output{std::string{}};
     State<std::string> clean_output{std::string{}};
+    State<std::string> last_opened_url{std::string{}};
+    State<SubosStatusSnapshot> selected_subos_status{SubosStatusSnapshot{}};
+    State<SubosPolicySnapshot> selected_subos_policy{SubosPolicySnapshot{}};
+    State<std::vector<SubosSessionItem>> selected_subos_sessions{std::vector<SubosSessionItem>{}};
+    State<std::vector<SubosRequestItem>> selected_subos_requests{std::vector<SubosRequestItem>{}};
+    State<SubosReportSnapshot> selected_subos_report{SubosReportSnapshot{}};
+    State<std::string> selected_subos_info{std::string{}};
+    State<SubosDoctorSnapshot> subos_doctor_snapshot{SubosDoctorSnapshot{}};
+    State<bool> loading_subos_governance{false};
+    State<std::string> subos_diff_output{std::string{}};
+    State<bool> loading_subos_diff{false};
+    State<std::string> subos_rollback_list_output{std::string{}};
+    State<std::vector<ConfigThemeItem>> config_themes{std::vector<ConfigThemeItem>{}};
+    State<bool> loading_config_themes{false};
+    State<std::vector<NetworkEndpoint>> network_endpoints{std::vector<NetworkEndpoint>{}};
+    State<std::optional<NetworkProbeResult>> network_probe_result{std::optional<NetworkProbeResult>{}};
+    State<bool> loading_network{false};
+    State<bool> probing_url{false};
+    State<std::string> script_output{std::string{}};
+    State<bool> running_script{false};
+    State<std::string> loaded_subos_governance_name{std::string{}};
 
     // Streaming Task Runner & Console
     State<bool> task_running{false};
@@ -445,8 +466,17 @@ public:
         if (suboses.empty()) {
             selected_subos = std::string{};
             loaded_subos_detail_name_.clear();
+            loaded_subos_governance_name = std::string{};
             selected_subos_env = std::vector<SubosEnvVar>{};
             selected_subos_events = std::vector<SubosEvent>{};
+            selected_subos_status = SubosStatusSnapshot{};
+            selected_subos_policy = SubosPolicySnapshot{};
+            selected_subos_sessions = std::vector<SubosSessionItem>{};
+            selected_subos_requests = std::vector<SubosRequestItem>{};
+            selected_subos_report = SubosReportSnapshot{};
+            selected_subos_info = std::string{};
+            subos_doctor_snapshot = SubosDoctorSnapshot{};
+            subos_rollback_list_output = std::string{};
             return;
         }
         std::string target = selected_subos.Get();
@@ -1199,6 +1229,7 @@ public:
             [name](const std::shared_ptr<XlingsStore>& s, TaskScope t, const CommandOutcome& out) {
                 if (out.ok) s->selected_subos = name;
                 s->loaded_subos_detail_name_.clear();
+                s->loaded_subos_governance_name = std::string{};
                 s->RefreshCore(t, true);
             }
         );
@@ -1216,6 +1247,7 @@ public:
             [name](const std::shared_ptr<XlingsStore>& s, TaskScope t, const CommandOutcome& out) {
                 if (out.ok) s->selected_subos = name;
                 s->loaded_subos_detail_name_.clear();
+                s->loaded_subos_governance_name = std::string{};
                 s->RefreshCore(t, true);
             }
         );
@@ -1232,6 +1264,7 @@ public:
             },
             [](const std::shared_ptr<XlingsStore>& s, TaskScope t, const CommandOutcome&) {
                 s->loaded_subos_detail_name_.clear();
+                s->loaded_subos_governance_name = std::string{};
                 s->RefreshCore(t, true);
             }
         );
@@ -1323,6 +1356,580 @@ public:
             },
             [](const std::shared_ptr<XlingsStore>& s, TaskScope t, const CommandOutcome&) {
                 s->RefreshIndexes(t, true);
+            }
+        );
+    }
+
+    void OpenUrl(ToastHandle toast, std::string_view raw_url) {
+        const std::string url = NormalizeBrowserUrl(raw_url);
+        if (url.empty()) {
+            toast.Show("无效的外部链接");
+            return;
+        }
+        last_opened_url = url;
+        if (skip_initial_refresh) {
+            return;
+        }
+        if (OpenExternalUrl(url)) {
+            toast.Show("已在默认浏览器中打开链接");
+        } else {
+            toast.Show("无法打开浏览器: " + url);
+        }
+    }
+
+    void RefreshConfigThemes(TaskScope tasks, bool force = false) {
+        if (loading_config_themes.Get()) return;
+        if (!force && !config_themes.Get().empty()) return;
+        loading_config_themes = true;
+        auto self = shared_from_this();
+        const XlingsClient client = client_;
+        tasks.Launch([self, client]() -> Task<void> {
+            auto themes = co_await RunWorker([client]() {
+                return client.QueryConfigThemes();
+            });
+            self->config_themes = std::move(themes);
+            self->loading_config_themes = false;
+        });
+    }
+
+    void RefreshNetworkEndpoints(TaskScope tasks, bool force = false) {
+        if (loading_network.Get()) return;
+        if (!force && !network_endpoints.Get().empty()) return;
+        loading_network = true;
+        auto self = shared_from_this();
+        const XlingsClient client = client_;
+        tasks.Launch([self, client]() -> Task<void> {
+            auto eps = co_await RunWorker([client]() {
+                return client.QueryNetworkEndpoints();
+            });
+            self->network_endpoints = std::move(eps);
+            self->loading_network = false;
+        });
+    }
+
+    void ProbeNetworkUrlAsync(TaskScope tasks, ToastHandle toast, std::string url) {
+        const std::string normalized = NormalizeBrowserUrl(url);
+        if (normalized.empty()) {
+            toast.Show("请输入有效的 http/https 链接");
+            return;
+        }
+        if (probing_url.Get()) {
+            toast.Show("正在探测网络连通性，请稍候");
+            return;
+        }
+        probing_url = true;
+        auto self = shared_from_this();
+        const XlingsClient client = client_;
+        tasks.Launch([self, client, toast, normalized]() -> Task<void> {
+            auto res = co_await RunWorker([client, normalized]() {
+                return client.ProbeUrl(normalized, 5000);
+            });
+            self->network_probe_result = res;
+            self->probing_url = false;
+            if (res.reachable) {
+                toast.Show("连通正常 (" + std::to_string(res.http_status) + ")");
+            } else {
+                toast.Show(res.error_message.empty() ? "探测不可达" : ("探测失败: " + res.error_message));
+            }
+        });
+    }
+
+    void LoadSubosGovernance(TaskScope tasks, std::string subos_name, bool force = false) {
+        if (subos_name.empty()) return;
+        if (loading_subos_governance.Get()) return;
+        if (!force && loaded_subos_governance_name.Get() == subos_name) return;
+
+        if (loaded_subos_governance_name.Get() != subos_name) {
+            selected_subos_status = SubosStatusSnapshot{};
+            selected_subos_policy = SubosPolicySnapshot{};
+            selected_subos_sessions = std::vector<SubosSessionItem>{};
+            selected_subos_requests = std::vector<SubosRequestItem>{};
+            selected_subos_report = SubosReportSnapshot{};
+            selected_subos_info = std::string{};
+            subos_doctor_snapshot = SubosDoctorSnapshot{};
+        }
+
+        loading_subos_governance = true;
+        auto self = shared_from_this();
+        const XlingsClient client = client_;
+        tasks.Launch([self, client, subos_name]() -> Task<void> {
+            struct GovernanceBundle {
+                SubosStatusSnapshot status;
+                SubosPolicySnapshot policy;
+                std::vector<SubosSessionItem> sessions;
+                std::vector<SubosRequestItem> requests;
+                SubosReportSnapshot report;
+                std::string info;
+                SubosDoctorSnapshot doctor;
+            };
+            GovernanceBundle bundle = co_await RunWorker([client, subos_name]() -> GovernanceBundle {
+                return GovernanceBundle{
+                    .status = client.QuerySubosStatus(subos_name),
+                    .policy = client.QuerySubosConfig(subos_name),
+                    .sessions = client.QuerySubosPs(subos_name),
+                    .requests = client.QuerySubosRequests(subos_name),
+                    .report = client.QuerySubosReport(subos_name),
+                    .info = client.QuerySubosInfo(subos_name),
+                    .doctor = client.QuerySubosDoctor(subos_name),
+                };
+            });
+            self->selected_subos_status = std::move(bundle.status);
+            self->selected_subos_policy = std::move(bundle.policy);
+            self->selected_subos_sessions = std::move(bundle.sessions);
+            self->selected_subos_requests = std::move(bundle.requests);
+            self->selected_subos_report = std::move(bundle.report);
+            self->selected_subos_info = std::move(bundle.info);
+            self->subos_doctor_snapshot = std::move(bundle.doctor);
+            self->loaded_subos_governance_name = subos_name;
+            self->loading_subos_governance = false;
+        });
+    }
+
+    void QuerySubosRollbackListAsync(TaskScope tasks, std::string name) {
+        if (name.empty()) return;
+        auto self = shared_from_this();
+        const XlingsClient client = client_;
+        tasks.Launch([self, client, name]() -> Task<void> {
+            auto text = co_await RunWorker([client, name]() {
+                return client.QuerySubosRollbackList(name);
+            });
+            self->subos_rollback_list_output = std::move(text);
+        });
+    }
+
+    void DiffSubosAsync(TaskScope tasks, std::string lhs, std::string rhs) {
+        if (lhs.empty() || rhs.empty()) return;
+        if (loading_subos_diff.Get()) return;
+        loading_subos_diff = true;
+        subos_diff_output = std::string{"正在对比 " + lhs + " 与 " + rhs + "..."};
+        auto self = shared_from_this();
+        const XlingsClient client = client_;
+        tasks.Launch([self, client, lhs, rhs]() -> Task<void> {
+            auto diff = co_await RunWorker([client, lhs, rhs]() {
+                return client.DiffSubos(lhs, rhs);
+            });
+            self->subos_diff_output = diff.empty() ? std::string{"(无对比输出)"} : std::move(diff);
+            self->loading_subos_diff = false;
+        });
+    }
+
+    void RunSubosExecWithOptions(
+        TaskScope tasks,
+        ToastHandle toast,
+        std::string subos_name,
+        std::vector<std::string> argv,
+        bool sandbox,
+        std::string cwd,
+        std::string timeout
+    ) {
+        if (argv.empty()) {
+            toast.Show("请输入要执行的命令");
+            return;
+        }
+        if (running_subos_exec.Get()) {
+            toast.Show("已有 SubOS 命令正在运行");
+            return;
+        }
+        running_subos_exec = true;
+        subos_exec_output = std::string{"正在执行...\n"};
+        auto self = shared_from_this();
+        const XlingsClient client = client_;
+        tasks.Launch([self, client, subos_name, argv = std::move(argv), sandbox, cwd, timeout]() mutable -> Task<void> {
+            std::string rendered = co_await RunWorker([client, subos_name, argv = std::move(argv), sandbox, cwd, timeout]() {
+                const CommandOutcome out = client.ExecInSubos(subos_name, argv, sandbox, cwd, timeout);
+                std::string text;
+                for (const auto& ev : out.events) {
+                    if (ev.kind == "data" && ev.data_kind == "subos_exec_output" && !ev.message.empty()) {
+                        text += ev.message;
+                    } else if (ev.kind == "error" && !ev.message.empty()) {
+                        if (!text.empty() && text.back() != '\n') text.push_back('\n');
+                        text += "[error] " + ev.message + "\n";
+                    }
+                }
+                if (text.empty()) {
+                    text = out.raw_output.empty() ? out.error_message : out.raw_output;
+                }
+                if (!out.ok && !out.error_message.empty() && text.find(out.error_message) == std::string::npos) {
+                    if (!text.empty() && text.back() != '\n') text.push_back('\n');
+                    text += "[exit " + std::to_string(out.exit_code) + "] " + out.error_message;
+                }
+                return text;
+            });
+            self->subos_exec_output = rendered.empty() ? std::string{"(命令结束，无标准输出)"} : std::move(rendered);
+            self->running_subos_exec = false;
+        });
+    }
+
+    void RunScriptAsync(
+        TaskScope tasks,
+        ToastHandle toast,
+        std::string script_file,
+        std::vector<std::string> script_args
+    ) {
+        if (script_file.empty()) {
+            toast.Show("请输入脚本路径");
+            return;
+        }
+        if (running_script.Get()) {
+            toast.Show("脚本正在执行中");
+            return;
+        }
+        running_script = true;
+        script_output = std::string{"正在运行脚本: " + script_file + "\n"};
+        auto self = shared_from_this();
+        const XlingsClient client = client_;
+        tasks.Launch([self, client, toast, script_file, script_args = std::move(script_args)]() mutable -> Task<void> {
+            CommandOutcome out = co_await RunWorker([client, script_file, script_args = std::move(script_args)]() {
+                return client.RunScript(script_file, script_args);
+            });
+            std::string rendered = out.raw_output;
+            if (!out.ok && !out.error_message.empty()) {
+                if (!rendered.empty() && rendered.back() != '\n') rendered.push_back('\n');
+                rendered += "[exit " + std::to_string(out.exit_code) + "] " + out.error_message;
+            }
+            self->script_output = rendered.empty() ? std::string{"(脚本完成，无输出)"} : std::move(rendered);
+            self->running_script = false;
+            toast.Show(out.ok ? "脚本运行完成" : ("脚本退出码 " + std::to_string(out.exit_code)));
+        });
+    }
+
+    void StartSubosSessionAsync(TaskScope tasks, ToastHandle toast, std::string name) {
+        const XlingsClient client = client_;
+        ExecuteOperation(
+            tasks,
+            toast,
+            "启动 SubOS 会话: " + name,
+            [client, name](auto on_ev, auto, auto ctrl) {
+                return client.StartSubosSession(name, std::move(on_ev), std::move(ctrl));
+            },
+            [name](const std::shared_ptr<XlingsStore>& s, TaskScope t, const CommandOutcome&) {
+                s->RefreshCore(t, true);
+                s->LoadSubosGovernance(t, name, true);
+            }
+        );
+    }
+
+    void StopSubosSessionAsync(TaskScope tasks, ToastHandle toast, std::string name) {
+        const XlingsClient client = client_;
+        ExecuteOperation(
+            tasks,
+            toast,
+            "停止 SubOS 会话: " + name,
+            [client, name](auto on_ev, auto, auto ctrl) {
+                return client.StopSubosSession(name, std::move(on_ev), std::move(ctrl));
+            },
+            [name](const std::shared_ptr<XlingsStore>& s, TaskScope t, const CommandOutcome&) {
+                s->RefreshCore(t, true);
+                s->LoadSubosGovernance(t, name, true);
+            }
+        );
+    }
+
+    void CreateSubosAdvancedAsync(TaskScope tasks, ToastHandle toast, SubosCreateOptions opts) {
+        const XlingsClient client = client_;
+        const std::string title = opts.dry_run
+                                      ? ("预览创建 SubOS: " + opts.name)
+                                      : ("创建 SubOS: " + opts.name);
+        ExecuteOperation(
+            tasks,
+            toast,
+            title,
+            [client, opts](auto on_ev, auto, auto ctrl) {
+                return client.CreateSubosAdvanced(opts, std::move(on_ev), std::move(ctrl));
+            },
+            [opts](const std::shared_ptr<XlingsStore>& s, TaskScope t, const CommandOutcome& out) {
+                if (!opts.dry_run && out.ok) {
+                    s->selected_subos = opts.name;
+                    s->loaded_subos_detail_name_.clear();
+                    s->loaded_subos_governance_name = std::string{};
+                    s->RefreshCore(t, true);
+                } else if (opts.dry_run && !out.raw_output.empty()) {
+                    s->subos_exec_output = out.raw_output;
+                }
+            }
+        );
+    }
+
+    void UpdateSubosConfigAsync(TaskScope tasks, ToastHandle toast, std::string name, SubosPolicyPatch patch) {
+        const XlingsClient client = client_;
+        ExecuteOperation(
+            tasks,
+            toast,
+            "更新 SubOS 策略: " + name,
+            [client, name, patch](auto on_ev, auto, auto ctrl) {
+                return client.UpdateSubosConfig(name, patch, std::move(on_ev), std::move(ctrl));
+            },
+            [name](const std::shared_ptr<XlingsStore>& s, TaskScope t, const CommandOutcome&) {
+                s->LoadSubosGovernance(t, name, true);
+            }
+        );
+    }
+
+    void ApproveSubosRequestAsync(TaskScope tasks, ToastHandle toast, std::string name, std::string req_id) {
+        const XlingsClient client = client_;
+        ExecuteOperation(
+            tasks,
+            toast,
+            "批准沙箱请求 #" + req_id,
+            [client, name, req_id](auto on_ev, auto, auto ctrl) {
+                return client.ApproveSubosRequest(name, req_id, std::move(on_ev), std::move(ctrl));
+            },
+            [name](const std::shared_ptr<XlingsStore>& s, TaskScope t, const CommandOutcome&) {
+                s->LoadSubosGovernance(t, name, true);
+            }
+        );
+    }
+
+    void DenySubosRequestAsync(TaskScope tasks, ToastHandle toast, std::string name, std::string req_id) {
+        const XlingsClient client = client_;
+        ExecuteOperation(
+            tasks,
+            toast,
+            "拒绝沙箱请求 #" + req_id,
+            [client, name, req_id](auto on_ev, auto, auto ctrl) {
+                return client.DenySubosRequest(name, req_id, std::move(on_ev), std::move(ctrl));
+            },
+            [name](const std::shared_ptr<XlingsStore>& s, TaskScope t, const CommandOutcome&) {
+                s->LoadSubosGovernance(t, name, true);
+            }
+        );
+    }
+
+    void RunSubosDoctorFixAsync(TaskScope tasks, ToastHandle toast, std::string name = {}) {
+        const XlingsClient client = client_;
+        const std::string label = name.empty() ? "修复所有 SubOS 策略包" : ("修复 SubOS 策略包: " + name);
+        ExecuteOperation(
+            tasks,
+            toast,
+            label,
+            [client, name](auto on_ev, auto, auto ctrl) {
+                return client.RunSubosDoctorFix(name, std::move(on_ev), std::move(ctrl));
+            },
+            [name](const std::shared_ptr<XlingsStore>& s, TaskScope t, const CommandOutcome&) {
+                const std::string target = name.empty() ? s->selected_subos.Get() : name;
+                if (!target.empty()) s->LoadSubosGovernance(t, target, true);
+            }
+        );
+    }
+
+    void UpgradeSubosAsync(
+        TaskScope tasks,
+        ToastHandle toast,
+        std::string name,
+        std::string to_version,
+        bool dry_run
+    ) {
+        const XlingsClient client = client_;
+        ExecuteOperation(
+            tasks,
+            toast,
+            dry_run ? ("预览升级 SubOS: " + name) : ("升级 SubOS: " + name),
+            [client, name, to_version, dry_run](auto on_ev, auto, auto ctrl) {
+                return client.UpgradeSubos(name, to_version, dry_run, std::move(on_ev), std::move(ctrl));
+            },
+            [name, dry_run](const std::shared_ptr<XlingsStore>& s, TaskScope t, const CommandOutcome&) {
+                if (!dry_run) {
+                    s->loaded_subos_detail_name_.clear();
+                    s->RefreshCore(t, true);
+                    s->LoadSubosGovernance(t, name, true);
+                }
+            }
+        );
+    }
+
+    void RollbackSubosAsync(TaskScope tasks, ToastHandle toast, std::string name, std::string generation) {
+        const XlingsClient client = client_;
+        ExecuteOperation(
+            tasks,
+            toast,
+            "回滚 SubOS: " + name,
+            [client, name, generation](auto on_ev, auto, auto ctrl) {
+                return client.RollbackSubos(name, generation, std::move(on_ev), std::move(ctrl));
+            },
+            [name](const std::shared_ptr<XlingsStore>& s, TaskScope t, const CommandOutcome&) {
+                s->loaded_subos_detail_name_.clear();
+                s->RefreshCore(t, true);
+                s->LoadSubosGovernance(t, name, true);
+                s->QuerySubosRollbackListAsync(t, name);
+            }
+        );
+    }
+
+    void RebindSubosRuntimeAsync(TaskScope tasks, ToastHandle toast, std::string name, std::string binding) {
+        const XlingsClient client = client_;
+        ExecuteOperation(
+            tasks,
+            toast,
+            "重绑定运行时 " + name + " -> " + binding,
+            [client, name, binding](auto on_ev, auto, auto ctrl) {
+                return client.RebindSubosRuntime(name, binding, std::move(on_ev), std::move(ctrl));
+            },
+            [name](const std::shared_ptr<XlingsStore>& s, TaskScope t, const CommandOutcome&) {
+                s->loaded_subos_detail_name_.clear();
+                s->RefreshCore(t, true);
+                s->LoadSubosGovernance(t, name, true);
+            }
+        );
+    }
+
+    void ExportSubosAsync(
+        TaskScope tasks,
+        ToastHandle toast,
+        std::string name,
+        std::string format,
+        std::string output_path,
+        std::string disk_size,
+        bool with_data
+    ) {
+        const XlingsClient client = client_;
+        ExecuteOperation(
+            tasks,
+            toast,
+            "导出 SubOS: " + name,
+            [client, name, format, output_path, disk_size, with_data](auto on_ev, auto, auto ctrl) {
+                return client.ExportSubos(
+                    name, format, output_path, disk_size, with_data, std::move(on_ev), std::move(ctrl));
+            },
+            [](const std::shared_ptr<XlingsStore>&, TaskScope, const CommandOutcome&) {}
+        );
+    }
+
+    void PackSubosAsync(
+        TaskScope tasks,
+        ToastHandle toast,
+        std::string name,
+        std::string as_pkg,
+        std::string out_dir
+    ) {
+        const XlingsClient client = client_;
+        ExecuteOperation(
+            tasks,
+            toast,
+            "打包 SubOS 为 xpkg: " + name,
+            [client, name, as_pkg, out_dir](auto on_ev, auto, auto ctrl) {
+                return client.PackSubos(name, as_pkg, out_dir, std::move(on_ev), std::move(ctrl));
+            },
+            [](const std::shared_ptr<XlingsStore>&, TaskScope, const CommandOutcome&) {}
+        );
+    }
+
+    void CopySubosFilesAsync(TaskScope tasks, ToastHandle toast, std::string src, std::string dst) {
+        const XlingsClient client = client_;
+        ExecuteOperation(
+            tasks,
+            toast,
+            "SubOS 文件拷贝",
+            [client, src, dst](auto on_ev, auto, auto ctrl) {
+                return client.CopySubosFiles(src, dst, std::move(on_ev), std::move(ctrl));
+            },
+            [](const std::shared_ptr<XlingsStore>&, TaskScope, const CommandOutcome&) {}
+        );
+    }
+
+    void SetConfigThemeAsync(TaskScope tasks, ToastHandle toast, std::string theme_name) {
+        const XlingsClient client = client_;
+        ExecuteOperation(
+            tasks,
+            toast,
+            "设置 CLI 主题 -> " + theme_name,
+            [client, theme_name](auto, auto on_line, auto ctrl) {
+                return client.SetConfigTheme(theme_name, std::move(on_line), std::move(ctrl));
+            },
+            [](const std::shared_ptr<XlingsStore>& s, TaskScope t, const CommandOutcome&) {
+                s->RefreshXlingsConfig(t, true);
+                s->RefreshConfigThemes(t, true);
+            }
+        );
+    }
+
+    void SetConfigRuntimeAsync(TaskScope tasks, ToastHandle toast, std::string runtime_spec) {
+        const XlingsClient client = client_;
+        ExecuteOperation(
+            tasks,
+            toast,
+            "设置默认运行时 -> " + runtime_spec,
+            [client, runtime_spec](auto, auto on_line, auto ctrl) {
+                return client.SetConfigRuntime(runtime_spec, std::move(on_line), std::move(ctrl));
+            },
+            [](const std::shared_ptr<XlingsStore>& s, TaskScope t, const CommandOutcome&) {
+                s->RefreshXlingsConfig(t, true);
+            }
+        );
+    }
+
+    void AddArchiveDirAsync(TaskScope tasks, ToastHandle toast, std::string dir_path) {
+        const XlingsClient client = client_;
+        ExecuteOperation(
+            tasks,
+            toast,
+            "添加离线归档目录",
+            [client, dir_path](auto, auto on_line, auto ctrl) {
+                return client.AddArchiveDir(dir_path, std::move(on_line), std::move(ctrl));
+            },
+            [](const std::shared_ptr<XlingsStore>& s, TaskScope t, const CommandOutcome&) {
+                s->RefreshXlingsConfig(t, true);
+            }
+        );
+    }
+
+    void RemoveArchiveDirAsync(TaskScope tasks, ToastHandle toast, std::string dir_path) {
+        const XlingsClient client = client_;
+        ExecuteOperation(
+            tasks,
+            toast,
+            "移除离线归档目录",
+            [client, dir_path](auto, auto on_line, auto ctrl) {
+                return client.RemoveArchiveDir(dir_path, std::move(on_line), std::move(ctrl));
+            },
+            [](const std::shared_ptr<XlingsStore>& s, TaskScope t, const CommandOutcome&) {
+                s->RefreshXlingsConfig(t, true);
+            }
+        );
+    }
+
+    void ClearLocalXpkgsAsync(TaskScope tasks, ToastHandle toast, std::string mode) {
+        const XlingsClient client = client_;
+        ExecuteOperation(
+            tasks,
+            toast,
+            mode == "all" ? "清空所有本地配方" : "清理过期本地配方",
+            [client, mode](auto, auto on_line, auto ctrl) {
+                return client.ClearLocalXpkgs(mode, std::move(on_line), std::move(ctrl));
+            },
+            [](const std::shared_ptr<XlingsStore>& s, TaskScope t, const CommandOutcome&) {
+                s->RefreshIndexes(t, true);
+            }
+        );
+    }
+
+    void RunSelfMigrateAsync(TaskScope tasks, ToastHandle toast) {
+        const XlingsClient client = client_;
+        ExecuteOperation(
+            tasks,
+            toast,
+            "迁移旧目录布局 (self migrate)",
+            [client](auto, auto on_line, auto ctrl) {
+                return client.RunSelfMigrate(std::move(on_line), std::move(ctrl));
+            },
+            [](const std::shared_ptr<XlingsStore>& s, TaskScope t, const CommandOutcome&) {
+                s->RefreshCore(t, true);
+                if (s->xlings_config_loaded.Get()) s->RefreshXlingsConfig(t, true);
+            }
+        );
+    }
+
+    void RunSelfInitAsync(TaskScope tasks, ToastHandle toast, std::string home_dir, bool force) {
+        const XlingsClient client = client_;
+        ExecuteOperation(
+            tasks,
+            toast,
+            "初始化 xlings 目录 (self init)",
+            [client, home_dir, force](auto, auto on_line, auto ctrl) {
+                return client.RunSelfInit(home_dir, force, std::move(on_line), std::move(ctrl));
+            },
+            [](const std::shared_ptr<XlingsStore>& s, TaskScope t, const CommandOutcome&) {
+                s->RefreshCore(t, true);
+                if (s->xlings_config_loaded.Get()) s->RefreshXlingsConfig(t, true);
             }
         );
     }

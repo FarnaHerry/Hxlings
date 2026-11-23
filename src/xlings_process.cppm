@@ -693,6 +693,54 @@ ProcessResult RunWindowsProcessStreamingImpl(
     return result;
 }
 
+template <bool Enabled>
+bool OpenExternalUrlWindowsImpl(const std::string& url) {
+    if constexpr (Enabled) {
+        const auto kernel32 = os::library::loaded("kernel32.dll");
+        if (!kernel32.has_value()) return false;
+        const auto mb_to_wc = kernel32->function<int(unsigned int, std::uint32_t, const char*, int, char16_t*, int)>(
+            "MultiByteToWideChar");
+        if (mb_to_wc == nullptr) return false;
+
+        auto to_wide = [&](std::string_view utf8) -> std::u16string {
+            if (utf8.empty()) return u"";
+            const int needed = mb_to_wc(65001u, 0u, utf8.data(), static_cast<int>(utf8.size()), nullptr, 0);
+            if (needed <= 0) return {};
+            std::u16string out(static_cast<std::size_t>(needed) + 1u, u'\0');
+            if (mb_to_wc(65001u, 0u, utf8.data(), static_cast<int>(utf8.size()), out.data(), needed) <= 0) {
+                return {};
+            }
+            out[static_cast<std::size_t>(needed)] = u'\0';
+            return out;
+        };
+
+        using ShellExecuteWFn = void*(void*, const char16_t*, const char16_t*, const char16_t*, const char16_t*, int);
+        ShellExecuteWFn* shell_execute_w = nullptr;
+        std::optional<os::library::handle> loaded_shell32 = os::library::loaded("shell32.dll");
+        os::library::handle opened_shell32;
+        if (loaded_shell32.has_value()) {
+            shell_execute_w = loaded_shell32->function<ShellExecuteWFn>("ShellExecuteW");
+        } else {
+            auto opened = os::library::open(os::fs::from_utf8("shell32.dll"));
+            if (!opened) return false;
+            opened_shell32 = std::move(*opened);
+            shell_execute_w = opened_shell32.function<ShellExecuteWFn>("ShellExecuteW");
+        }
+        if (shell_execute_w == nullptr) return false;
+
+        const std::u16string wop = u"open";
+        const std::u16string wurl = to_wide(url);
+        if (wurl.empty()) return false;
+
+        constexpr int kSwShowNormal = 1;
+        void* ret = shell_execute_w(nullptr, wop.c_str(), wurl.c_str(), nullptr, nullptr, kSwShowNormal);
+        return reinterpret_cast<std::intptr_t>(ret) > 32;
+    } else {
+        (void)url;
+        return false;
+    }
+}
+
 } // namespace hxlings::detail
 
 export namespace hxlings {
@@ -835,6 +883,95 @@ ProcessResult RunProcessStreaming(
         control->pid.store(-1, std::memory_order_release);
     }
     return result;
+}
+
+std::string NormalizeBrowserUrl(std::string_view raw_url) {
+    std::size_t start = 0;
+    while (start < raw_url.size() &&
+           (raw_url[start] == ' ' || raw_url[start] == '\t' || raw_url[start] == '\r' || raw_url[start] == '\n')) {
+        ++start;
+    }
+    std::size_t end = raw_url.size();
+    while (end > start &&
+           (raw_url[end - 1] == ' ' || raw_url[end - 1] == '\t' || raw_url[end - 1] == '\r' || raw_url[end - 1] == '\n')) {
+        --end;
+    }
+    const std::string_view sv = raw_url.substr(start, end - start);
+    if (sv.empty()) return {};
+
+    auto ascii_lower = [](char ch) -> char {
+        return (ch >= 'A' && ch <= 'Z') ? static_cast<char>(ch - 'A' + 'a') : ch;
+    };
+    auto starts_with_ci = [&](std::string_view prefix) -> bool {
+        if (sv.size() < prefix.size()) return false;
+        for (std::size_t i = 0; i < prefix.size(); ++i) {
+            if (ascii_lower(sv[i]) != prefix[i]) return false;
+        }
+        return true;
+    };
+
+    std::string scheme;
+    std::size_t rest_pos = 0;
+    if (starts_with_ci("https://")) {
+        scheme = "https://";
+        rest_pos = 8;
+    } else if (starts_with_ci("http://")) {
+        scheme = "http://";
+        rest_pos = 7;
+    } else {
+        return {};
+    }
+
+    const std::string_view rest = sv.substr(rest_pos);
+    if (rest.empty()) return {};
+    if (rest[0] == '/' || rest[0] == '?' || rest[0] == '#') return {};
+    for (const unsigned char ch : sv) {
+        if (ch <= 0x20u || ch == 0x7Fu || ch == '"' || ch == '\'' || ch == '<' || ch == '>') {
+            return {};
+        }
+    }
+    return scheme + std::string(rest);
+}
+
+bool IsSafeExternalUrl(std::string_view raw_url) {
+    return !NormalizeBrowserUrl(raw_url).empty();
+}
+
+bool OpenExternalUrl(std::string_view raw_url) {
+    const std::string url = NormalizeBrowserUrl(raw_url);
+    if (url.empty()) return false;
+
+    namespace os = mcpplibs::os;
+    if constexpr (os::is_windows) {
+        return detail::OpenExternalUrlWindowsImpl<os::is_windows>(url);
+    } else if constexpr (os::is_macos) {
+        os::process::spawn_options opts;
+        opts.program = os::fs::from_utf8("/usr/bin/open");
+        opts.args = {url};
+        opts.in = os::process::stdio::null;
+        opts.out = os::process::stdio::null;
+        opts.err = os::process::stdio::null;
+        opts.own_unit = false;
+        opts.bound_lifetime = false;
+        auto spawned = os::process::process::spawn(opts);
+        if (!spawned) return false;
+        spawned->detach();
+        return true;
+    } else {
+        os::process::spawn_options opts;
+        opts.program = os::fs::from_utf8("xdg-open");
+        opts.args = {url};
+        opts.in = os::process::stdio::null;
+        opts.out = os::process::stdio::null;
+        opts.err = os::process::stdio::null;
+        opts.own_unit = false;
+        opts.bound_lifetime = false;
+        opts.env = detail::BuildSanitizedEnvOverrides();
+        auto spawned = os::process::process::spawn(opts);
+        if (!spawned) return false;
+        spawned->detach();
+        return true;
+    }
 }
 
 } // namespace hxlings

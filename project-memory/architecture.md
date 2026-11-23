@@ -5,7 +5,7 @@
 - **CLI 适配与进程层**：
   - `xlings.types`（`src/xlings_types.cppm`）：核心领域结构体（包、SubOS、索引、配置、Profile、搜索结果等）。
   - `xlings.parser`（`src/xlings_parser.cppm`）：NDJSON / JSON 解析、空白规范化、`SplitPackageSpec`、版本比较及批量清理/更新计划推导。
-  - `xlings.process`（`src/xlings_process.cppm`）：基于 `mcpplibs.os` 定位 `xlings` 二进制并流式派生子进程，支持 `ActiveProcessControl` 取消。
+  - `xlings.process`（`src/xlings_process.cppm`）：基于 `mcpplibs.os` 定位 `xlings` 二进制并流式派生子进程（支持 `ActiveProcessControl` 取消与 Windows `CreateProcessW`/`CREATE_NO_WINDOW` 无闪烁启动），并提供跨平台默认浏览器拉起 `OpenExternalUrl`（Windows `ShellExecuteW`、macOS `/usr/bin/open`、Linux 清洗环境 `xdg-open`）与 URL 安全校验 `IsSafeExternalUrl`。
   - `xlings.client`（`src/xlings_client.cppm`）：封装所有 `xlings` 读写命令，将进程输出映射为强类型结果或结构化事件。
 - **客户端基础设施层**：
   - `hxlings.settings`（`src/app_settings.cppm`）：客户端本地 JSON 配置持久化（`os::dirs::config()/hxlings/settings.json`）。
@@ -29,7 +29,8 @@
 - **懒加载域（按需后台拉取）**：
   - 已安装详情（`EnsureInstalledDetailLoaded`）与 SubOS 详情（`EnsureSubosDetailLoaded`）分别在切换到 `nav == 1` / `nav == 3` 时按需加载。
   - 索引页面（`nav == 4`）通过 `RefreshIndexes` 拆分轻量仓库/本地 xpkg 查询与耗时较长（实测约 2.36 s）的 `ListIndexVersions()` 远程快照查询，均不阻塞 UI 交互。
-  - `xlings` 全局配置（`RefreshXlingsConfig`）与 `Profile` 代际（`RefreshProfiles`）分别在进入设置页标签 1 与标签 2 时按需加载。
+  - `xlings` 全局配置（`RefreshXlingsConfig` / `RefreshConfigThemes`）、网络端点与诊断（`RefreshNetworkEndpoints`）、以及 `Profile` 代际（`RefreshProfiles`）分别在进入设置页标签 1 与标签 2 时按需加载。
+  - SubOS 治理面（`LoadSubosGovernance`：合并 `status`/`config`/`ps`/`requests`/`report`/`info`/`doctor` 查询）仅在切换到 `SubOS` 页“策略”/“会话”标签或手动刷新时按 `hash(subos_name)` 懒加载。
 - **定向刷新**：各写操作完成后仅调用受影响域的刷新函数（如修改仓库/快照仅调用 `RefreshIndexes(t, true)`，修改 `xlings config` 仅调用 `RefreshXlingsConfig(t, true)`）。
 
 ## 3. 配置解耦与托盘/Logo 管线

@@ -319,4 +319,73 @@ VectorAsset KeyboardIcon() {
     });
 }
 
+VectorAsset ExternalLinkIcon(float w = 1.8F) {
+    return VectorAsset::Create({24.0F, 24.0F}, [w](VectorBuilder& b) {
+        const auto c = Color::White();
+        const auto st = detail::RoundStroke(w);
+        Path box;
+        box.MoveTo({18.0F, 13.0F})
+           .LineTo({18.0F, 19.0F})
+           .LineTo({5.0F, 19.0F})
+           .LineTo({5.0F, 6.0F})
+           .LineTo({11.0F, 6.0F});
+        b.StrokePath(box, c, st);
+        Path arrow;
+        arrow.MoveTo({15.0F, 4.0F}).LineTo({20.0F, 4.0F}).LineTo({20.0F, 9.0F});
+        b.StrokePath(arrow, c, st);
+        Path diag;
+        diag.MoveTo({10.0F, 14.0F}).LineTo({20.0F, 4.0F});
+        b.StrokePath(diag, c, st);
+    });
+}
+
+VectorAsset GlobeIcon(float w = 1.8F) {
+    return VectorAsset::Create({24.0F, 24.0F}, [w](VectorBuilder& b) {
+        const auto c = Color::White();
+        const auto st = detail::RoundStroke(w);
+        b.StrokePath(Path::RoundedRect({3.0F, 3.0F, 18.0F, 18.0F}, CornerRadii{9.0F}), c, st);
+        b.StrokePath(Path::RoundedRect({8.0F, 3.0F, 8.0F, 18.0F}, CornerRadii{4.0F}), c, st);
+        Path eq;
+        eq.MoveTo({3.5F, 12.0F}).LineTo({20.5F, 12.0F});
+        b.StrokePath(eq, c, st);
+    });
+}
+
+VectorAsset ShieldIcon(float w = 1.8F) {
+    return VectorAsset::Create({24.0F, 24.0F}, [w](VectorBuilder& b) {
+        const auto c = Color::White();
+        const auto st = detail::RoundStroke(w);
+        Path sh;
+        sh.MoveTo({12.0F, 3.0F})
+          .LineTo({19.5F, 6.0F})
+          .LineTo({19.5F, 11.5F})
+          .CubicTo({19.5F, 16.5F}, {16.2F, 19.8F}, {12.0F, 21.0F})
+          .CubicTo({7.8F, 19.8F}, {4.5F, 16.5F}, {4.5F, 11.5F})
+          .LineTo({4.5F, 6.0F})
+          .Close();
+        b.StrokePath(sh, c, st);
+    });
+}
+
+VectorAsset FileCodeIcon(float w = 1.8F) {
+    return VectorAsset::Create({24.0F, 24.0F}, [w](VectorBuilder& b) {
+        const auto c = Color::White();
+        const auto st = detail::RoundStroke(w);
+        Path doc;
+        doc.MoveTo({6.0F, 3.0F})
+           .LineTo({14.5F, 3.0F})
+           .LineTo({18.5F, 7.0F})
+           .LineTo({18.5F, 21.0F})
+           .LineTo({6.0F, 21.0F})
+           .Close();
+        b.StrokePath(doc, c, st);
+        Path left_chev;
+        left_chev.MoveTo({10.5F, 12.0F}).LineTo({8.5F, 14.0F}).LineTo({10.5F, 16.0F});
+        b.StrokePath(left_chev, c, st);
+        Path right_chev;
+        right_chev.MoveTo({13.5F, 12.0F}).LineTo({15.5F, 14.0F}).LineTo({13.5F, 16.0F});
+        b.StrokePath(right_chev, c, st);
+    });
+}
+
 } // namespace hxlings::icons

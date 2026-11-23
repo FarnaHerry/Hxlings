@@ -497,6 +497,8 @@ std::shared_ptr<XlingsStore> MakeSeededStore() {
         .ui_mode = "cli",
         .theme = "light",
         .interactive = "false",
+        .default_runtime = "glibc@2.44",
+        .archive_dirs = {"/tmp/xlings-archives"},
     };
 
     store->profiles = {
@@ -526,6 +528,66 @@ std::shared_ptr<XlingsStore> MakeSeededStore() {
             lines.push_back("[08:25:" + std::to_string(10 + i) + "] xlings check line #" + std::to_string(i));
         });
     }
+
+    store->config_themes = std::vector<ConfigThemeItem>{
+        ConfigThemeItem{.name = "default", .source = "(built in)", .active = true},
+        ConfigThemeItem{.name = "tokyo-night", .source = "@xlings/config/themes/tokyo-night.json", .active = false},
+    };
+    store->network_endpoints = std::vector<NetworkEndpoint>{
+        NetworkEndpoint{.region = "GLOBAL", .resource = "xim", .url = "https://raw.githubusercontent.com/openxlings/xim-pkgindex/main"},
+        NetworkEndpoint{.region = "CN", .resource = "xim", .url = "https://raw.gitcode.com/sunrisepeak/xim-pkgindex/raw/main"},
+    };
+    store->network_probe_result = NetworkProbeResult{
+        .url = "https://github.com/FarnaHerry/Hxlings",
+        .host = "github.com",
+        .status = "reachable",
+        .reachable = true,
+        .http_status = 200,
+        .elapsed_seconds = 0.128,
+        .proxy = false,
+        .ok = true,
+    };
+    store->script_output = std::string("[xlings script] hello from test\n");
+    store->selected_subos_status = SubosStatusSnapshot{
+        .instance = "default",
+        .policy_source = "@xlings/config/policies/dev.json",
+        .enters = true,
+        .backend = "bwrap",
+        .gates = {
+            SubosGateStatus{.gate = "userns", .enforced = true, .reason = "unprivileged user namespaces ready", .route = "userns", .supported = true},
+        },
+        .requested = SubosPolicySnapshot{
+            .extends = "dev",
+            .source = "inline",
+            .net = "nat",
+            .observe_level = "standard",
+            .fetch_default = "ask",
+            .index_update = "auto",
+        },
+    };
+    store->selected_subos_policy = store->selected_subos_status.Get().requested;
+    store->selected_subos_sessions = std::vector<SubosSessionItem>{
+        SubosSessionItem{.id = "sess-01", .instance = "default", .backend = "bwrap", .started = "2026-11-23T00:00:00Z", .state = "running", .pid = 4321, .command = "bash"},
+    };
+    store->selected_subos_requests = std::vector<SubosRequestItem>{
+        SubosRequestItem{.id = "req-1", .instance = "default", .kind = "pkg", .resource = "xim:cmake", .detail = "sandbox install request", .state = "pending"},
+    };
+    store->selected_subos_report = SubosReportSnapshot{
+        .instance = "default",
+        .policy_changes = {"net=nat"},
+        .sessions = {
+            SubosReportSession{.id = "rep-1", .backend = "bwrap", .started = "2026-11-23", .commands = 4, .executions = 2, .exit_code = 0, .duration_ms = 320},
+        },
+    };
+    store->selected_subos_info = std::string("=== default ===\nactive: yes\npackages: 115\ncommands: 119\n");
+    store->subos_doctor_snapshot = SubosDoctorSnapshot{
+        .errors = 0,
+        .findings = {
+            SubosDoctorFinding{.instance = "default", .check = "userns", .level = "info", .detail = "sandbox backend operational", .fix = ""},
+        },
+    };
+    store->subos_diff_output = std::string("两个 SubOS 的包清单完全一致（无差异）。");
+    store->subos_rollback_list_output = std::string("generation 1 (active)");
 
     return store;
 }
@@ -970,22 +1032,32 @@ void AuditAllPagesAtViewport(
     ui.Pump();
     AuditCurrentScreen(ctx, ui, w, h, "Store", "page-store", true);
 
-    // SubOS (all 4 tabs, with split view)
+    // SubOS (all 6 tabs, with split view + Diff / Export modals)
     SafeTap(ctx, vp_tag + " / SubOS", ui.Find(UiSelector::Key("nav-subos")), "nav-subos");
     ui.Pump();
     AuditCurrentScreen(ctx, ui, w, h, "SubOS[Shims]", "page-subos", true);
 
-    if (SafeTap(ctx, vp_tag + " / SubOS[EnvVars]", ui.Find(UiSelector::Text("环境变量")), "环境变量")) {
+    if (SafeTap(ctx, vp_tag + " / SubOS[EnvVars]", ui.Find(UiSelector::Text("环境")), "环境")) {
         ui.Pump();
         AuditCurrentScreen(ctx, ui, w, h, "SubOS[EnvVars]", "page-subos", true);
     }
 
-    if (SafeTap(ctx, vp_tag + " / SubOS[Exec]", ui.Find(UiSelector::Text("执行命令")), "执行命令")) {
+    if (SafeTap(ctx, vp_tag + " / SubOS[Exec]", ui.Find(UiSelector::Text("执行")), "执行")) {
         ui.Pump();
         AuditCurrentScreen(ctx, ui, w, h, "SubOS[Exec]", "page-subos", true);
     }
 
-    if (SafeTap(ctx, vp_tag + " / SubOS[Events]", ui.Find(UiSelector::Text("审计事件")), "审计事件")) {
+    if (SafeTap(ctx, vp_tag + " / SubOS[Policy]", ui.Find(UiSelector::Text("策略")), "策略")) {
+        ui.Pump();
+        AuditCurrentScreen(ctx, ui, w, h, "SubOS[Policy]", "page-subos", true);
+    }
+
+    if (SafeTap(ctx, vp_tag + " / SubOS[Sessions]", ui.Find(UiSelector::Text("会话")), "会话")) {
+        ui.Pump();
+        AuditCurrentScreen(ctx, ui, w, h, "SubOS[Sessions]", "page-subos", true);
+    }
+
+    if (SafeTap(ctx, vp_tag + " / SubOS[Events]", ui.Find(UiSelector::Text("审计")), "审计")) {
         ui.Pump();
         AuditCurrentScreen(ctx, ui, w, h, "SubOS[Events]", "page-subos", true);
     }
@@ -1009,6 +1081,42 @@ void AuditAllPagesAtViewport(
                              {.timeout = 2s, .step = 50ms});
             } catch (const UiTestFailure& ex) {
                 ctx.Flag(vp_tag + " / NewSubosDialog", std::string("NewSubosDialog still mounted after cancel: ") + ex.what());
+            }
+        }
+    }
+
+    // SubOS Diff modal dialog
+    if (SafeTap(ctx, vp_tag + " / SubosDiffDialog", ui.Find(UiSelector::Text("对比 Diff")), "对比 Diff")) {
+        ui.Pump(500ms);
+        ui.Pump();
+        if (!ui.Find(UiSelector::Key("subos-diff-dialog")).Exists()) {
+            ctx.Flag(vp_tag + " / SubosDiffDialog", "SubosDiffDialog did not mount");
+        }
+        AuditCurrentScreen(ctx, ui, w, h, "SubosDiffDialog", "page-subos", false, true);
+        if (SafeTap(ctx, vp_tag + " / SubosDiffDialog", ui.Find(UiSelector::Text("关闭")), "关闭(SubosDiffDialog)")) {
+            try {
+                ui.PumpUntil([&] { return !ui.Find(UiSelector::Key("subos-diff-dialog")).Exists(); },
+                             {.timeout = 2s, .step = 50ms});
+            } catch (const UiTestFailure& ex) {
+                ctx.Flag(vp_tag + " / SubosDiffDialog", std::string("SubosDiffDialog still mounted after close: ") + ex.what());
+            }
+        }
+    }
+
+    // SubOS Export / Pack modal dialog
+    if (SafeTap(ctx, vp_tag + " / SubosExportDialog", ui.Find(UiSelector::Text("导出 / 打包")), "导出 / 打包")) {
+        ui.Pump(500ms);
+        ui.Pump();
+        if (!ui.Find(UiSelector::Key("subos-export-dialog")).Exists()) {
+            ctx.Flag(vp_tag + " / SubosExportDialog", "SubosExportDialog did not mount");
+        }
+        AuditCurrentScreen(ctx, ui, w, h, "SubosExportDialog", "page-subos", false, true);
+        if (SafeTap(ctx, vp_tag + " / SubosExportDialog", ui.Find(UiSelector::Text("取消")), "取消(SubosExportDialog)")) {
+            try {
+                ui.PumpUntil([&] { return !ui.Find(UiSelector::Key("subos-export-dialog")).Exists(); },
+                             {.timeout = 2s, .step = 50ms});
+            } catch (const UiTestFailure& ex) {
+                ctx.Flag(vp_tag + " / SubosExportDialog", std::string("SubosExportDialog still mounted after cancel: ") + ex.what());
             }
         }
     }
@@ -1046,6 +1154,24 @@ void AuditAllPagesAtViewport(
     }
     if (!ui.Find(UiSelector::Key("settings-about-card")).Exists()) {
         ctx.Flag(vp_tag + " / Settings[App]", "Missing settings-about-card");
+    }
+    store->last_opened_url = std::string{};
+    try {
+        auto scroll_q = ui.Find(UiSelector::Key("settings-scroll"));
+        auto link_q = scroll_q.ScrollUntil(UiSelector::Key("about-link-hxlings"));
+        ui.Pump();
+        if (SafeTap(ctx, vp_tag + " / SettingsAboutLink", link_q, "about-link-hxlings")) {
+            ui.Pump();
+            if (store->last_opened_url.Get() != "https://github.com/FarnaHerry/Hxlings") {
+                ctx.Flag(vp_tag + " / SettingsAboutLink",
+                         "Clicking about-link-hxlings did not record GitHub URL (got '" +
+                             store->last_opened_url.Get() + "')");
+            }
+        }
+        scroll_q.ScrollBy({0.0F, -2000.0F});
+        ui.Pump();
+    } catch (const UiTestFailure& ex) {
+        ctx.Flag(vp_tag + " / SettingsAboutLink", std::string("ScrollUntil about-link-hxlings failed: ") + ex.what());
     }
     if (SafeTap(ctx, vp_tag + " / ThemeDark", ui.Find(UiSelector::Key("theme-mode-dark")), "theme-mode-dark")) {
         ui.Pump(550ms);
