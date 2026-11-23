@@ -15,7 +15,7 @@ description: >-
 
 1. **二进制发现顺序**：`HXLINGS_BIN` 环境变量 -> `PATH`（跳过含 `/.mcpp/registry` 或 `\.mcpp\registry` 的条目）-> `~/.xlings/subos/current/bin/xlings` -> `~/.xlings/bin/xlings` ->（macOS）Homebrew 标准路径。
 2. **环境清理**：启动子进程前剔除指向 `.mcpp/registry` 的 `XLINGS_HOME`、`XLINGS_DATA`、`XLINGS_SUBOS`，防止 `mcpp run` 环境下管理错目录；同时剔除自包含包封装器注入的 `MCPP_BUNDLE_DIR`，并在 POSIX 下清理指向包前缀或 `.mcpp/registry` 的 `GCONV_PATH`、`LOCPATH` 与 `LD_LIBRARY_PATH` 条目（避免宿主工具加载包内 glibc 2.44 模块失败）。
-3. **可取消流式执行**：长耗时写操作统一通过 `RunProcessStreaming` + `ActiveProcessControl` 传入 `XlingsStore::ExecuteOperation`，在任务控制台支持取消与实时进度反馈。
+3. **跨平台隐藏执行与可取消流式读取**：POSIX（Linux / macOS）走 `mcpplibs::os::process::process::spawn`；Windows（`os::is_windows`）通过 `kernel32.dll` 动态调用 `CreateProcessW(..., CREATE_NO_WINDOW)` + `SW_HIDE` + Job Object（`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`）+ `spawn_mutex` 串行化句柄继承与 `PeekNamedPipe` 非阻塞读取，彻底避免 GUI 启动控制台 `xlings.exe` 时弹窗。所有长耗时写操作统一通过 `RunProcessStreaming` + `ActiveProcessControl` 传入 `XlingsStore::ExecuteOperation`。
 
 ## 2. 命令耗时特征与分层加载原则
 

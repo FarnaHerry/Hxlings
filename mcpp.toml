@@ -1,6 +1,6 @@
 [package]
 name        = "hxlings"
-version     = "0.1.3"
+version     = "0.1.4"
 standard    = "c++23"
 description = "Desktop GUI manager for xlings built with mcpp and HuxerUI"
 license     = "MIT"

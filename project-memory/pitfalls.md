@@ -51,3 +51,11 @@
 13. **Linux `--mode self-contained` 找不到宿主 `libGL`/`libGLX_mesa` 退化为 GTK4 Cairo 粉色方块**
     - **现象**：自包含包默认的 `ld-linux-x86-64.so.2 --library-path "$here/lib"` 不读宿主 `/etc/ld.so.cache` 与 `/lib64`，导致 `libepoxy` `dlopen(libEGL/libGL)` 失败（`Not using GL: libEGL not available`），GTK4 退化为 `GskCairoRenderer` 并把 `gtk_snapshot_push_fill` 节点渲染成 `#FF69B4` 粉色矩形。
     - **解决**：将 `--library-path` 修补为 `"$here/lib:/usr/lib/x86_64-linux-gnu:/usr/lib64:/lib/x86_64-linux-gnu:/lib64"`（包内优先、宿主 GPU 库兜底），使 GTK4 正常启用 `GskNglRenderer`（`AppImage` 在 `build.mcpp` 修补，`tar` 在 CI 重打包修补）。
+
+14. **Windows `mcpp.dist.wix` 默认模板缺失 `<MediaTemplate EmbedCab="yes" />` 产出 36 KB 空壳 `.msi`**
+    - **现象**：WiX v5 默认 `EmbedCab="no"`，把实际文件压入同目录外部 `cab1.cab`，单独上传 `.msi` 后仅 36 KB 且无法安装。
+    - **解决**：由 root `build.mcpp` 生成自定义 `Hxlings-package.wxs`（显式声明 `<MediaTemplate EmbedCab="yes" />`、`app.ico`、`ARPPRODUCTICON` 与开始菜单/桌面快捷方式），并在 Windows CI 校验 `Media.Cabinet` 以 `#` 开头且独立 `msiexec /a`（不带外部 `.cab`）能完整解出二进制与 `resources.bin`。
+
+15. **Windows GUI 进程调用 `mcpplibs::os::process` 拉起控制台 `xlings.exe` 连续弹出终端窗口**
+    - **现象**：`hxlings.exe` 为 `windows_subsystem = "windows"`，通过当前 `mcpplibs.os`（无 `CREATE_NO_WINDOW` 选项）调用控制台 `xlings.exe` 时，Windows 为每个子进程弹出可见终端（启动 5 路并发 `RefreshCore` 会连闪一堆终端）。
+    - **解决**：`src/xlings_process.cppm` 在 `os::is_windows` 下改由 `kernel32.dll` 动态调用 `CreateProcessW` 并传入 `CREATE_NO_WINDOW`（`0x08000000`）+ `SW_HIDE` + Job Object（`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`）；并发创建管道/可继承句柄区间须加 `spawn_mutex`，防止并发子进程误继承写端导致 `PeekNamedPipe` 阻塞不返回 EOF。
