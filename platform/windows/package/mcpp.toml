@@ -1,6 +1,6 @@
 [package]
 name        = "hxlings-installer"
-version     = "0.1.5"
+version     = "0.1.6"
 standard    = "c++23"
 description = "HuxerUI Windows bootstrapper installer UI for Hxlings"
 license     = "MIT"
