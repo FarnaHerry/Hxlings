@@ -165,12 +165,13 @@ View StorePage() {
                 },
             }).With(Grow(1.0F)),
             ActionButton(
-                searching ? "搜索中..." : "搜索",
+                "搜索",
                 ButtonTone::Primary,
                 [trigger_search]() mutable { trigger_search(); },
-                !searching,
+                true,
                 icons::SearchIcon(),
-                false
+                false,
+                searching
             ),
         }.With(Spacing(10.0F), CrossAlign(CrossAxisAlignment::Center)),
         Flow(std::move(cat_chips)).With(Spacing(8.0F)),
@@ -189,7 +190,7 @@ View StorePage() {
     View left_pane = View{};
     if (searching) {
         left_pane = Column {
-            ProgressCircle().With(Frame{.width = 28.0F, .height = 28.0F}),
+            InlineSpinner(28.0F, theme.colors.primary),
             Text("正在检索软件包...", TextRole::Body)
                 .Style(TextStyle{.foreground = theme.colors.on_surface_variant}),
         }.With(
@@ -355,7 +356,7 @@ View StorePage() {
     View right_pane = View{};
     if (!selected_pkg.empty() && loading_detail && !detail_opt.has_value()) {
         right_pane = Column {
-            ProgressCircle().With(Frame{.width = 28.0F, .height = 28.0F}),
+            InlineSpinner(28.0F, theme.colors.primary),
             Text("正在加载 " + selected_pkg + " 详情...", TextRole::Body)
                 .Style(TextStyle{.foreground = theme.colors.on_surface_variant}),
         }.With(
@@ -453,7 +454,7 @@ View StorePage() {
                             Text(d.description.empty() ? std::string("暂无描述") : d.description, TextRole::Body)
                                 .Style(TextStyle{.foreground = theme.colors.on_surface_variant}),
                         }.With(Spacing(6.0F), Grow(1.0F)),
-                        loading_detail ? View(ProgressCircle().With(Frame{.width = 18.0F, .height = 18.0F})) : View{},
+                        LoadingIndicatorSlot(loading_detail, 16.0F),
                     }.With(Spacing(10.0F)),
                 }.With(Spacing(10.0F), CrossAlign(CrossAxisAlignment::Stretch))
             )

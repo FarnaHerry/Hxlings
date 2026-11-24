@@ -10,6 +10,7 @@ import xlings.client;
 import hxlings.theme;
 import hxlings.settings;
 import hxlings.updater;
+import hxlings.single_instance;
 
 using namespace huxerui;
 
@@ -160,6 +161,8 @@ public:
     State<std::optional<NetworkProbeResult>> network_probe_result{std::optional<NetworkProbeResult>{}};
     State<bool> loading_network{false};
     State<bool> probing_url{false};
+    State<std::string> probing_target_url{std::string{}};
+    State<bool> probing_custom_url{false};
     State<std::string> script_output{std::string{}};
     State<bool> running_script{false};
     State<std::string> loaded_subos_governance_name{std::string{}};
@@ -518,7 +521,7 @@ public:
         auto self = shared_from_this();
         const XlingsClient client = client_;
 
-        if (force || (!indexes_loaded.Get() && !loading_indexes.Get())) {
+        if (!loading_indexes.Get() && (force || !indexes_loaded.Get())) {
             loading_indexes = true;
             tasks.Launch([self, client]() -> Task<void> {
                 IndexesLocalSnapshot snap = co_await RunWorker([client]() -> IndexesLocalSnapshot {
@@ -534,7 +537,7 @@ public:
             });
         }
 
-        if (force || (!index_versions_loaded.Get() && !loading_index_versions.Get())) {
+        if (!loading_index_versions.Get() && (force || !index_versions_loaded.Get())) {
             loading_index_versions = true;
             tasks.Launch([self, client]() -> Task<void> {
                 std::vector<IndexRepoVersions> snap = co_await RunWorker([client]() {
@@ -548,7 +551,8 @@ public:
     }
 
     void RefreshXlingsConfig(TaskScope tasks, bool force = false) {
-        if (!force && (xlings_config_loaded.Get() || loading_xlings_config.Get())) return;
+        if (loading_xlings_config.Get()) return;
+        if (!force && xlings_config_loaded.Get()) return;
         loading_xlings_config = true;
         auto self = shared_from_this();
         const XlingsClient client = client_;
@@ -563,7 +567,8 @@ public:
     }
 
     void RefreshProfiles(TaskScope tasks, bool force = false) {
-        if (!force && (profiles_loaded.Get() || loading_profiles.Get())) return;
+        if (loading_profiles.Get()) return;
+        if (!force && profiles_loaded.Get()) return;
         loading_profiles = true;
         auto self = shared_from_this();
         const XlingsClient client = client_;
@@ -584,11 +589,16 @@ public:
         if (nav == 4 || indexes_loaded.Get()) {
             RefreshIndexes(tasks, true);
         }
+        if (nav == 3 && !selected_subos.Get().empty() && !loaded_subos_governance_name.Get().empty()) {
+            LoadSubosGovernance(tasks, selected_subos.Get(), true);
+        }
         if ((nav == 5 && stab == 1) || xlings_config_loaded.Get()) {
             RefreshXlingsConfig(tasks, true);
+            RefreshConfigThemes(tasks, true);
         }
         if ((nav == 5 && stab == 2) || profiles_loaded.Get()) {
             RefreshProfiles(tasks, true);
+            RefreshNetworkEndpoints(tasks, true);
         }
     }
 
@@ -1418,7 +1428,7 @@ public:
         });
     }
 
-    void ProbeNetworkUrlAsync(TaskScope tasks, ToastHandle toast, std::string url) {
+    void ProbeNetworkUrlAsync(TaskScope tasks, ToastHandle toast, std::string url, bool from_custom = false) {
         const std::string normalized = NormalizeBrowserUrl(url);
         if (normalized.empty()) {
             ShowToastSafe("请输入有效的 http/https 链接", toast);
@@ -1429,6 +1439,8 @@ public:
             return;
         }
         probing_url = true;
+        probing_custom_url = from_custom;
+        probing_target_url = from_custom ? std::string{} : url;
         auto self = shared_from_this();
         const XlingsClient client = client_;
         tasks.Launch([self, client, toast, normalized]() -> Task<void> {
@@ -1437,6 +1449,8 @@ public:
             });
             self->network_probe_result = res;
             self->probing_url = false;
+            self->probing_custom_url = false;
+            self->probing_target_url = std::string{};
             if (res.reachable) {
                 self->ShowToastSafe("连通正常 (" + std::to_string(res.http_status) + ")", toast);
             } else if (!res.error_message.empty()) {
@@ -2589,6 +2603,13 @@ public:
             st.phase = UpdatePhase::Installing;
             st.status_message = "正在启动更新安装流程...";
         });
+        const bool releases_for_relaunch =
+            snap.install_kind == UpdateInstallKind::LinuxAppImage ||
+            snap.install_kind == UpdateInstallKind::WindowsSetupExe ||
+            snap.install_kind == UpdateInstallKind::WindowsMsi;
+        if (releases_for_relaunch) {
+            ReleaseProcessSingleInstance(false);
+        }
         const ApplyUpdateResult res = ApplyDownloadedUpdate(
             mcpplibs::os::fs::from_utf8(snap.downloaded_file_path),
             snap.install_kind
@@ -2600,8 +2621,11 @@ public:
         });
         ShowToastSafe(res.message, toast);
         if (res.ok && res.should_quit_app) {
+            ReleaseProcessSingleInstance(true);
             force_quit_requested = true;
             application.Quit();
+        } else if (releases_for_relaunch) {
+            (void)AcquireProcessSingleInstance();
         }
     }
 

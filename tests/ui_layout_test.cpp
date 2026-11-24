@@ -1782,6 +1782,193 @@ void TestThemeAndDisabledControls(AuditContext& ctx, UiTest& ui, const std::shar
     ui.Pump();
 }
 
+void TestUnifiedRefreshStates(AuditContext& ctx, UiTest& ui, const std::shared_ptr<XlingsStore>& store) {
+    ui.SetWindowMetrics({.viewport = {1180.0F, 760.0F}});
+
+    auto verify_in_place = [&](const std::string& scope, const std::string& key, auto&& set_loading) {
+        auto q = ui.Find(UiSelector::Key(key));
+        if (!q.Exists()) {
+            ctx.Flag(scope, "Missing refresh control key: " + key);
+            return;
+        }
+        const UiNodeInfo idle_info = q.One();
+        if (q.Find(UiSelector::Enabled(false)).Exists() || !q.Find(UiSelector::Enabled(true)).Exists()) {
+            ctx.Flag(scope, "Refresh control '" + key + "' expected enabled before loading");
+        }
+        if (!q.Find(UiSelector::Type<Image>()).Exists()) {
+            ctx.Flag(scope, "Refresh control '" + key + "' missing refresh Image before loading");
+        }
+
+        set_loading(true);
+        ui.Pump();
+
+        auto q_loading = ui.Find(UiSelector::Key(key));
+        if (!q_loading.Exists()) {
+            ctx.Flag(scope, "Refresh control '" + key + "' disappeared while loading");
+            set_loading(false);
+            ui.Pump();
+            return;
+        }
+        const UiNodeInfo loading_info = q_loading.One();
+        if (!q_loading.Find(UiSelector::Enabled(false)).Exists()) {
+            ctx.Flag(scope, "Refresh control '" + key + "' expected disabled interactive node while loading");
+        }
+        if (q_loading.Find(UiSelector::Type<Image>()).Exists()) {
+            ctx.Flag(scope, "Refresh control '" + key + "' still rendering static icon while loading");
+        }
+        if (std::fabs(loading_info.bounds.x - idle_info.bounds.x) > 1.0F ||
+            std::fabs(loading_info.bounds.width - idle_info.bounds.width) > 1.0F) {
+            ctx.Flag(scope, "Refresh control '" + key + "' shifted/resized while loading: idle=" +
+                                FmtRect(idle_info.bounds) + " loading=" + FmtRect(loading_info.bounds));
+        }
+
+        set_loading(false);
+        ui.Pump();
+
+        auto q_restored = ui.Find(UiSelector::Key(key));
+        if (!q_restored.Exists() || q_restored.Find(UiSelector::Enabled(false)).Exists() ||
+            !q_restored.Find(UiSelector::Type<Image>()).Exists()) {
+            ctx.Flag(scope, "Refresh control '" + key + "' did not restore enabled state and icon after loading");
+        }
+    };
+
+    // 1. Dashboard & TitleBar in Light and Dark modes
+    store->active_nav = 0;
+    for (const ThemeMode mode : {ThemeMode::Light, ThemeMode::Dark}) {
+        const std::string mode_tag = (mode == ThemeMode::Light) ? "Light" : "Dark";
+        store->SetThemeMode(mode);
+        store->refreshing = false;
+        ui.Pump();
+
+        verify_in_place("UnifiedRefresh[" + mode_tag + " / title]", "title-refresh-btn", [&](bool v) {
+            store->refreshing = v;
+        });
+        verify_in_place("UnifiedRefresh[" + mode_tag + " / dashboard]", "dashboard-refresh-btn", [&](bool v) {
+            store->refreshing = v;
+        });
+
+        store->refreshing = true;
+        ui.Pump();
+        AuditCurrentScreen(ctx, ui, 1180.0F, 760.0F, "DashboardRefreshing[" + mode_tag + "]", "page-dashboard");
+        store->refreshing = false;
+        ui.Pump();
+    }
+
+    store->SetThemeMode(ThemeMode::Light);
+
+    // 2. Indexes page
+    store->active_nav = 4;
+    ui.Pump();
+    verify_in_place("UnifiedRefresh / Indexes(local)", "indexes-refresh-btn", [&](bool v) {
+        store->loading_indexes = v;
+    });
+    verify_in_place("UnifiedRefresh / Indexes(versions)", "indexes-refresh-btn", [&](bool v) {
+        store->loading_index_versions = v;
+    });
+
+    // 3. Settings Tab 0 / 1 / 2
+    store->active_nav = 5;
+    store->settings_tab = 0;
+    ui.Pump();
+    const AppUpdateState saved_upd = store->app_update_state.Get();
+    try {
+        (void)ui.Find(UiSelector::Key("settings-scroll")).ScrollUntil(UiSelector::Key("about-check-update-btn"));
+        ui.Pump();
+    } catch (const UiTestFailure& ex) {
+        ctx.Flag("UnifiedRefresh / SettingsAbout", std::string("ScrollUntil about-check-update-btn failed: ") + ex.what());
+    }
+    verify_in_place("UnifiedRefresh / SettingsAbout", "about-check-update-btn", [&](bool v) {
+        AppUpdateState next = saved_upd;
+        next.phase = v ? UpdatePhase::Checking : UpdatePhase::Available;
+        store->app_update_state = std::move(next);
+    });
+    store->app_update_state = saved_upd;
+    ui.Find(UiSelector::Key("settings-scroll")).ScrollBy({0.0F, -2000.0F});
+    ui.Pump();
+
+    store->settings_tab = 1;
+    ui.Pump();
+    verify_in_place("UnifiedRefresh / SettingsConfig", "settings-refresh-cfg-btn", [&](bool v) {
+        store->loading_xlings_config = v;
+    });
+    try {
+        (void)ui.Find(UiSelector::Key("settings-scroll")).ScrollUntil(UiSelector::Key("settings-refresh-themes-btn"));
+        ui.Pump();
+    } catch (const UiTestFailure& ex) {
+        ctx.Flag("UnifiedRefresh / SettingsThemes", std::string("ScrollUntil settings-refresh-themes-btn failed: ") + ex.what());
+    }
+    verify_in_place("UnifiedRefresh / SettingsThemes", "settings-refresh-themes-btn", [&](bool v) {
+        store->loading_config_themes = v;
+    });
+    ui.Find(UiSelector::Key("settings-scroll")).ScrollBy({0.0F, -2000.0F});
+    ui.Pump();
+
+    store->settings_tab = 2;
+    ui.Pump();
+    verify_in_place("UnifiedRefresh / SettingsNetwork", "settings-refresh-net-btn", [&](bool v) {
+        store->loading_network = v;
+    });
+    try {
+        (void)ui.Find(UiSelector::Key("settings-scroll")).ScrollUntil(UiSelector::Key("settings-refresh-profiles-btn"));
+        ui.Pump();
+    } catch (const UiTestFailure& ex) {
+        ctx.Flag("UnifiedRefresh / SettingsProfiles", std::string("ScrollUntil settings-refresh-profiles-btn failed: ") + ex.what());
+    }
+    verify_in_place("UnifiedRefresh / SettingsProfiles", "settings-refresh-profiles-btn", [&](bool v) {
+        store->loading_profiles = v;
+    });
+    ui.Find(UiSelector::Key("settings-scroll")).ScrollBy({0.0F, -2000.0F});
+    ui.Pump();
+
+    // 4. SubOS detail slot stability + events/policy refresh
+    store->active_nav = 3;
+    ui.Pump();
+    if (SafeTap(ctx, "UnifiedRefresh / SubOS[Events]", ui.Find(UiSelector::Text("审计")), "审计")) {
+        ui.Pump();
+        auto find_detail_active_badge = [&]() -> std::optional<Rect> {
+            std::optional<Rect> best;
+            for (const auto& n : ui.Find(UiSelector::Text("当前活跃")).All()) {
+                if (n.participates_in_layout && n.in_viewport && n.bounds.x > 500.0F) {
+                    if (!best.has_value() || n.bounds.x > best->x) {
+                        best = n.bounds;
+                    }
+                }
+            }
+            return best;
+        };
+        const std::optional<Rect> active_badge_before = find_detail_active_badge();
+        if (!active_badge_before.has_value()) {
+            ctx.Flag("UnifiedRefresh / SubOSDetailHeader", "Expected visible SubOS detail '当前活跃' badge");
+        }
+        verify_in_place("UnifiedRefresh / SubOSEvents", "subos-refresh-events-btn", [&](bool v) {
+            store->loading_subos_detail = v;
+        });
+        if (active_badge_before.has_value()) {
+            store->loading_subos_detail = true;
+            ui.Pump();
+            const std::optional<Rect> active_badge_after = find_detail_active_badge();
+            if (!active_badge_after.has_value() ||
+                std::fabs(active_badge_after->x - active_badge_before->x) > 1.0F) {
+                ctx.Flag("UnifiedRefresh / SubOSDetailHeader",
+                         "SubOS '当前活跃' badge shifted horizontally when loading_subos_detail turned true");
+            }
+            store->loading_subos_detail = false;
+            ui.Pump();
+        }
+    }
+    if (SafeTap(ctx, "UnifiedRefresh / SubOS[Policy]", ui.Find(UiSelector::Text("策略")), "策略")) {
+        ui.Pump();
+        verify_in_place("UnifiedRefresh / SubOSPolicy", "subos-refresh-policy-btn", [&](bool v) {
+            store->loading_subos_governance = v;
+        });
+    }
+
+    store->SetThemeMode(ThemeMode::Auto);
+    store->active_nav = 0;
+    store->settings_tab = 0;
+    ui.Pump();
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1835,6 +2022,7 @@ int main(int argc, char** argv) {
     TestDuplicateDataNoDuplicateKeys(ctx, ui, store);
     TestSearchBoxes(ctx, ui, store);
     TestThemeAndDisabledControls(ctx, ui, store);
+    TestUnifiedRefreshStates(ctx, ui, store);
 
     if (ctx.anomalies.empty()) {
         std::cout << "UI layout test passed with 0 anomalies.\n";

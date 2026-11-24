@@ -71,14 +71,12 @@ View DashboardPage() {
     }.With(Spacing(8.0F));
 
     View hero_actions = Flow {
-        ActionButton(
-            refreshing ? "刷新中..." : "刷新全部状态",
-            ButtonTone::Primary,
+        RefreshButton(
+            "刷新全部状态",
             [store, tasks] { store->RefreshAll(tasks); },
-            !refreshing,
-            icons::RefreshIcon(),
-            true
-        ),
+            refreshing,
+            ButtonTone::Primary
+        ).Key("dashboard-refresh-btn"),
         ActionButton(
             "更新索引",
             ButtonTone::Secondary,

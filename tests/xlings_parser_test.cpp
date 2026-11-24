@@ -8,6 +8,7 @@ import xlings.client;
 import hxlings.settings;
 import hxlings.platform_icon;
 import hxlings.updater;
+import hxlings.single_instance;
 
 using namespace hxlings;
 
@@ -914,6 +915,91 @@ void TestAppUpdaterParsingSha256AndSelection() {
           "Linux portable fallback picks AppImage");
 }
 
+void TestSingleInstanceGuard() {
+    Check(SanitizeSingleInstanceToken("alice.smith+dev@host!#$", 20) == "alicesmithdevhost",
+          "SanitizeSingleInstanceToken strips unsupported punctuation");
+    Check(SanitizeSingleInstanceToken("0123456789abcdefghijEXTRA", 20) == "0123456789abcdefghij",
+          "SanitizeSingleInstanceToken enforces max length");
+    Check(SanitizeSingleInstanceToken("dev_user-01", 20) == "dev_user-01",
+          "SanitizeSingleInstanceToken preserves [A-Za-z0-9_-]");
+
+    const SingleInstanceEndpoint def_ep = ResolveDefaultSingleInstanceEndpoint();
+    Check(!def_ep.directory.empty(), "ResolveDefaultSingleInstanceEndpoint returns non-empty directory");
+    Check(!def_ep.name.empty() && def_ep.name.ends_with(".sock") && def_ep.name.size() <= 40,
+          "ResolveDefaultSingleInstanceEndpoint returns bounded .sock name");
+
+    std::error_code ec;
+    std::filesystem::path temp_base = mcpplibs::os::dirs::temp();
+    if (temp_base.empty()) {
+        temp_base = std::filesystem::temp_directory_path(ec);
+    }
+    const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+    const auto tmp_dir = temp_base / ("hxl-si-" + std::to_string(stamp % 1000000));
+    std::filesystem::remove_all(tmp_dir, ec);
+    std::filesystem::create_directories(tmp_dir, ec);
+
+    const auto caps = mcpplibs::os::fs::caps(tmp_dir);
+    if (caps && caps->local_endpoint) {
+        std::atomic<int> activations{0};
+        SingleInstanceGuard primary;
+        const SingleInstanceStatus s1 = primary.Acquire(
+            {tmp_dir, "a.sock"},
+            [&activations] { activations.fetch_add(1, std::memory_order_relaxed); }
+        );
+        Check(s1 == SingleInstanceStatus::Primary && primary.ShouldContinueLaunch(),
+              "SingleInstanceGuard first instance becomes Primary");
+
+        SingleInstanceGuard secondary;
+        const SingleInstanceStatus s2 = secondary.Acquire({tmp_dir, "a.sock"});
+        Check(s2 == SingleInstanceStatus::SecondaryNotified && !secondary.ShouldContinueLaunch(),
+              "SingleInstanceGuard second instance notifies Primary and exits launch");
+        Check(activations.load(std::memory_order_relaxed) == 1,
+              "Primary received first activation before secondary returned");
+
+        SingleInstanceGuard third;
+        const SingleInstanceStatus s3 = third.Acquire({tmp_dir, "a.sock"});
+        Check(s3 == SingleInstanceStatus::SecondaryNotified &&
+                  activations.load(std::memory_order_relaxed) == 2,
+              "Primary received second activation");
+
+        SingleInstanceGuard primary2;
+        Check(primary2.Acquire({tmp_dir, "b.sock"}) == SingleInstanceStatus::Primary,
+              "Primary without initial handler starts cleanly");
+        SingleInstanceGuard secondary2;
+        Check(secondary2.Acquire({tmp_dir, "b.sock"}) == SingleInstanceStatus::SecondaryNotified,
+              "Secondary notifies Primary before activation handler is registered");
+        std::atomic<int> delayed_activations{0};
+        primary2.SetActivationHandler([&delayed_activations] {
+            delayed_activations.fetch_add(1, std::memory_order_relaxed);
+        });
+        Check(delayed_activations.load(std::memory_order_relaxed) == 1,
+              "Buffered early activation fires immediately upon SetActivationHandler");
+        primary2.Release();
+
+        primary.Release();
+        Check(primary.Status() == SingleInstanceStatus::Unavailable,
+              "Release resets Primary guard status");
+        Check(!std::filesystem::exists(tmp_dir / "a.sock", ec),
+              "Release unlinks primary rendezvous socket");
+
+        SingleInstanceGuard next_primary;
+        Check(next_primary.Acquire({tmp_dir, "a.sock"}) == SingleInstanceStatus::Primary,
+              "New instance acquires Primary after Release");
+        next_primary.Release();
+
+        {
+            std::ofstream stale_file(tmp_dir / "c.sock", std::ios::binary);
+            stale_file << "stale";
+        }
+        SingleInstanceGuard stale_guard;
+        Check(stale_guard.Acquire({tmp_dir, "c.sock"}) == SingleInstanceStatus::Primary,
+              "Primary recovers from stale non-listening rendezvous file");
+        stale_guard.Release();
+    }
+
+    std::filesystem::remove_all(tmp_dir, ec);
+}
+
 int main() {
     TestSplitPackageSpec();
     TestNdjsonAndEnv();
@@ -936,6 +1022,7 @@ int main() {
     TestSubosGovernanceAndFormatParsers();
     TestTimestampParsingAndFormatting();
     TestAppUpdaterParsingSha256AndSelection();
+    TestSingleInstanceGuard();
 
     if (failures == 0) {
         std::println("All parser and xlings integration tests passed.");

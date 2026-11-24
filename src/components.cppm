@@ -135,16 +135,50 @@ enum class ButtonTone {
 };
 
 [[huxerui::composable]]
+View InlineSpinner(float size, Color color) {
+    Color track = color;
+    track.alpha *= 0.22F;
+    ThemeDefinition overrides;
+    overrides.Set(ProgressCircleStyle{
+        .size = size,
+        .stroke_width = size <= 16.0F ? 1.8F : 2.2F,
+        .track_color = track,
+        .indeterminate_track_color = track,
+        .indicator_color = color,
+        .track_gap = 0.0F,
+        .indeterminate_motion = ProgressCircleIndeterminateMotion::Sweep,
+        .minimum_indeterminate_arc_fraction = 0.28F,
+        .maximum_indeterminate_arc_fraction = 0.28F,
+        .animation_duration = 0.9,
+    });
+    return Theme(std::move(overrides), ProgressCircle().With(Frame{.width = size, .height = size}));
+}
+
+[[huxerui::composable]]
+View LoadingIndicatorSlot(bool loading, float size = 16.0F) {
+    const ThemeSpec& theme = UseTheme();
+    return Row {
+        loading ? InlineSpinner(size, theme.colors.primary) : View{},
+    }.With(
+        Frame{.width = size, .height = size},
+        MainAlign(MainAxisAlignment::Center),
+        CrossAlign(CrossAxisAlignment::Center)
+    );
+}
+
+[[huxerui::composable]]
 View ActionButton(
     std::string label,
     ButtonTone tone,
     std::function<void()> on_click,
     bool enabled = true,
     std::optional<VectorAsset> icon = std::nullopt,
-    bool compact = false
+    bool compact = false,
+    bool loading = false
 ) {
     const ThemeSpec& theme = UseTheme();
     const StatusPalette sp = ResolveStatusPalette(theme);
+    const bool interactive = enabled && !loading;
 
     Color bg = theme.colors.primary;
     Color fg = theme.colors.on_primary;
@@ -152,9 +186,11 @@ View ActionButton(
     float border_w = 0.0F;
     Color hover_overlay = sp.hover_on_accent;
     Color press_overlay = sp.press_on_accent;
+    Color spinner_color = theme.colors.primary;
 
     switch (tone) {
         case ButtonTone::Primary:
+            spinner_color = theme.colors.on_primary;
             break;
         case ButtonTone::Secondary:
             bg = theme.colors.surface_container_high;
@@ -163,22 +199,27 @@ View ActionButton(
             border_w = 1.0F;
             hover_overlay = sp.hover_subtle;
             press_overlay = sp.press_subtle;
+            spinner_color = theme.colors.primary;
             break;
         case ButtonTone::Danger:
             bg = sp.danger_fill;
             fg = sp.on_danger_fill;
+            spinner_color = sp.on_danger_fill;
             break;
         case ButtonTone::Ghost:
             bg = Color::Transparent();
-            fg = enabled ? theme.colors.on_surface_variant : sp.ghost_disabled_fg;
+            fg = interactive ? theme.colors.on_surface_variant : sp.ghost_disabled_fg;
             hover_overlay = sp.hover_subtle;
             press_overlay = sp.press_subtle;
+            spinner_color = theme.colors.primary;
             break;
     }
 
+    const float sz = compact ? 14.0F : 16.0F;
     std::vector<View> items;
-    if (icon.has_value()) {
-        const float sz = compact ? 14.0F : 16.0F;
+    if (loading) {
+        items.push_back(InlineSpinner(sz, spinner_color));
+    } else if (icon.has_value()) {
         items.push_back(
             Image(*icon)
                 .Fit(ImageFit::Contain)
@@ -215,12 +256,32 @@ View ActionButton(
             Border{border_col, border_w},
             CornerRadius(8.0F),
             std::move(ind),
-            Focusable(enabled),
-            Enabled(enabled),
-            PointerCursor(enabled ? PointerCursorKind::Hand : PointerCursorKind::Default),
+            Focusable(interactive),
+            Enabled(interactive),
+            PointerCursor(interactive ? PointerCursorKind::Hand : PointerCursorKind::Default),
             Semantics{.role = SemanticRole::Button, .label = label.empty() ? std::string("Action") : label}
         )
         .OnClick(std::move(on_click));
+}
+
+[[huxerui::composable]]
+View RefreshButton(
+    std::string label,
+    std::function<void()> on_click,
+    bool refreshing,
+    ButtonTone tone = ButtonTone::Secondary,
+    bool enabled = true,
+    bool compact = true
+) {
+    return ActionButton(
+        std::move(label),
+        tone,
+        std::move(on_click),
+        enabled,
+        icons::RefreshIcon(),
+        compact,
+        refreshing
+    );
 }
 
 struct SearchBoxOptions {

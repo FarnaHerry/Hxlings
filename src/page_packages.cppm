@@ -145,15 +145,15 @@ View BatchPruneDialogContent(
             std::nullopt,
             true
         ),
-        ActionButton(
+        RefreshButton(
             "重新扫描",
-            ButtonTone::Secondary,
             [excluded_keys, store, tasks]() mutable {
                 excluded_keys = std::vector<std::string>{};
                 store->ScanExpiredVersions(tasks);
             },
-            !scanning && !store->skip_initial_refresh,
-            icons::RefreshIcon(),
+            scanning,
+            ButtonTone::Secondary,
+            !store->skip_initial_refresh,
             true
         ),
     }.With(Spacing(8.0F), CrossAlign(CrossAxisAlignment::Center));
@@ -162,7 +162,7 @@ View BatchPruneDialogContent(
     if (scanning) {
         list_body = Row {
             Spacer{}.With(Grow(1.0F)),
-            ProgressCircle().With(Frame{.width = 20.0F, .height = 20.0F}),
+            InlineSpinner(20.0F, theme.colors.primary),
             Text("正在通过 xlings dry-run 扫描所有多版本包...", TextRole::Body)
                 .Style(TextStyle{.foreground = theme.colors.on_surface_variant}),
             Spacer{}.With(Grow(1.0F)),
@@ -392,15 +392,15 @@ View BatchUpdateDialogContent(
             std::nullopt,
             true
         ),
-        ActionButton(
+        RefreshButton(
             "重新扫描",
-            ButtonTone::Secondary,
             [excluded_keys, store, tasks]() mutable {
                 excluded_keys = std::vector<std::string>{};
                 store->ScanUpdatablePackages(tasks);
             },
-            !scanning && !store->skip_initial_refresh,
-            icons::RefreshIcon(),
+            scanning,
+            ButtonTone::Secondary,
+            !store->skip_initial_refresh,
             true
         ),
     }.With(Spacing(8.0F), CrossAlign(CrossAxisAlignment::Center));
@@ -432,7 +432,7 @@ View BatchUpdateDialogContent(
     if (scanning) {
         list_body = Row {
             Spacer{}.With(Grow(1.0F)),
-            ProgressCircle().With(Frame{.width = 20.0F, .height = 20.0F}),
+            InlineSpinner(20.0F, theme.colors.primary),
             Text("正在检查全部已安装软件包的可用更新...", TextRole::Body)
                 .Style(TextStyle{.foreground = theme.colors.on_surface_variant}),
             Spacer{}.With(Grow(1.0F)),
@@ -937,7 +937,7 @@ View PackagesPage() {
                                     .foreground = theme.colors.on_surface_variant,
                                 }),
                         }.With(Spacing(6.0F), Grow(1.0F)),
-                        loading_detail ? View(ProgressCircle().With(Frame{.width = 18.0F, .height = 18.0F})) : View{},
+                        LoadingIndicatorSlot(loading_detail, 16.0F),
                     }.With(Spacing(10.0F), CrossAlign(CrossAxisAlignment::Start)),
                     Flow {
                         ActionButton(
@@ -1002,7 +1002,7 @@ View PackagesPage() {
             detail_sections.push_back(
                 Card(
                     Row {
-                        ProgressCircle().With(Frame{.width = 16.0F, .height = 16.0F}),
+                        InlineSpinner(16.0F, theme.colors.primary),
                         Text("正在预演清理计划...", TextRole::Body)
                             .Style(TextStyle{.foreground = theme.colors.on_surface_variant}),
                     }.With(Spacing(8.0F), CrossAlign(CrossAxisAlignment::Center))

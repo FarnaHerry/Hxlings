@@ -9,6 +9,7 @@ import hxlings.icons;
 import hxlings.shortcuts;
 import hxlings.settings;
 import hxlings.platform_icon;
+import hxlings.single_instance;
 import hxlings.store;
 import hxlings.components;
 import hxlings.console;
@@ -53,7 +54,7 @@ void InstallApplication(ApplicationContext& context) {
 
     const auto ensure_main_window = [weak_store, application] {
         const auto s = weak_store.lock();
-        if (!s) return;
+        if (!s || s->force_quit_requested) return;
         if (s->main_window.has_value() && s->main_window->IsOpen()) {
             s->main_window->Show();
             s->main_window->Restore();
@@ -70,6 +71,9 @@ void InstallApplication(ApplicationContext& context) {
         store->tray_activate_registered = true;
         tray.OnActivate(ensure_main_window);
     }
+    SetProcessSingleInstanceActivationHandler([app_tasks, ensure_main_window] {
+        app_tasks.Post(ensure_main_window);
+    });
 
     store->on_tray_state_changed = [weak_store, application, tray, app_tasks, ensure_main_window] {
         const auto s = weak_store.lock();
@@ -122,6 +126,7 @@ void InstallApplication(ApplicationContext& context) {
             MenuSection{},
             MenuItem("退出 Hxlings", [weak_store, application] {
                 if (auto st = weak_store.lock()) st->force_quit_requested = true;
+                ReleaseProcessSingleInstance(true);
                 application.Quit();
             }),
         };
@@ -180,17 +185,21 @@ View TitleIconAction(
     std::string tooltip,
     std::function<void()> on_click,
     bool enabled = true,
-    std::string semantic_label = "Action"
+    std::string semantic_label = "Action",
+    bool loading = false
 ) {
     const ThemeSpec& theme = UseTheme();
     const StatusPalette sp = ResolveStatusPalette(theme);
-    const Color tint = enabled ? theme.colors.on_surface_variant : sp.ghost_disabled_fg;
+    const bool interactive = enabled && !loading;
+    const Color tint = interactive ? theme.colors.on_surface_variant : sp.ghost_disabled_fg;
     return Row {
-        Image(std::move(icon))
-            .Fit(ImageFit::Contain)
-            .Align(HorizontalAlignment::Center, VerticalAlignment::Center)
-            .Tint(tint)
-            .With(Frame{.width = 16.0F, .height = 16.0F}),
+        loading
+            ? InlineSpinner(16.0F, theme.colors.primary)
+            : Image(std::move(icon))
+                  .Fit(ImageFit::Contain)
+                  .Align(HorizontalAlignment::Center, VerticalAlignment::Center)
+                  .Tint(tint)
+                  .With(Frame{.width = 16.0F, .height = 16.0F}),
     }.With(
         Padding(6.0F),
         CornerRadius(8.0F),
@@ -199,9 +208,9 @@ View TitleIconAction(
             .press = IndicationLayer{.fill = sp.press_subtle},
         },
         Tooltip(std::move(tooltip)),
-        Focusable(enabled),
-        Enabled(enabled),
-        PointerCursor(enabled ? PointerCursorKind::Hand : PointerCursorKind::Default),
+        Focusable(interactive),
+        Enabled(interactive),
+        PointerCursor(interactive ? PointerCursorKind::Hand : PointerCursorKind::Default),
         Semantics{.role = SemanticRole::Button, .label = std::move(semantic_label)}
     ).OnClick(std::move(on_click));
 }
@@ -261,6 +270,7 @@ View MainShell(bool effective_dark) {
             return true;
         }
         store->force_quit_requested = true;
+        ReleaseProcessSingleInstance(true);
         application.Quit();
         return true;
     });
@@ -335,6 +345,7 @@ View MainShell(bool effective_dark) {
         window.OnShortcut(Key::W, primary, [window] { window.Close(); return true; });
         window.OnShortcut(Key::Q, primary, [store, application] {
             store->force_quit_requested = true;
+            ReleaseProcessSingleInstance(true);
             application.Quit();
             return true;
         });
@@ -347,7 +358,6 @@ View MainShell(bool effective_dark) {
 
     const std::size_t nav_idx = store->active_nav.Get();
     const bool refreshing = store->refreshing.Get();
-    const bool task_running = store->task_running.Get();
     const auto& env = store->env.Get();
     const auto& groups = store->installed_groups.Get();
     const auto& suboses = store->subos_list.Get();
@@ -372,16 +382,16 @@ View MainShell(bool effective_dark) {
             ? View{}
             : StatusBadge(env.mirror, theme.colors.on_surface_variant, sp.muted_bg),
         Spacer{}.With(Grow(1.0F)),
-        (refreshing || task_running)
-            ? View(ProgressCircle().With(Frame{.width = 15.0F, .height = 15.0F}))
-            : View{},
         TitleIconAction(
-            app::images::refresh,
-            "刷新全部 xlings 状态 (" + FormatShortcut("R") + ")",
+            icons::RefreshIcon(),
+            refreshing
+                ? std::string("正在刷新全部 xlings 状态...")
+                : ("刷新全部 xlings 状态 (" + FormatShortcut("R") + ")"),
             [store, tasks] { store->RefreshAll(tasks); },
-            !refreshing,
-            "刷新"
-        ),
+            true,
+            "刷新",
+            refreshing
+        ).Key("title-refresh-btn"),
     }.With(
         Padding(kIsMacOs ? EdgeInsets{.left = 8.0F, .right = 14.0F} : EdgeInsets{.left = 14.0F, .right = 8.0F}),
         Spacing(10.0F),

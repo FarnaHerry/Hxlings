@@ -280,14 +280,15 @@ View SubosDiffDialogContent(
     View actions = Row {
         Spacer{}.With(Grow(1.0F)),
         ActionButton("关闭", ButtonTone::Secondary, [ctx] { ctx.Dismiss(); }),
-        ActionButton(
-            loading ? "对比中..." : "开始对比",
-            ButtonTone::Primary,
+        RefreshButton(
+            "开始对比",
             [store, tasks, lhs_input, rhs_input] {
                 store->DiffSubosAsync(tasks, lhs_input.Get().text, rhs_input.Get().text);
             },
-            !loading,
-            icons::RefreshIcon()
+            loading,
+            ButtonTone::Primary,
+            true,
+            false
         ),
     }.With(Spacing(10.0F));
 
@@ -734,14 +735,11 @@ View SubosPolicyTabView(
                         "隔离状态与内核门控 (subos status)",
                         "后端: " + (st.backend.empty() ? std::string("未加载") : st.backend) +
                             " · 策略来源: " + (st.policy_source.empty() ? std::string("默认") : st.policy_source),
-                        ActionButton(
-                            loading ? "加载中..." : "刷新策略",
-                            ButtonTone::Secondary,
+                        RefreshButton(
+                            "刷新策略",
                             [store, tasks, cur_name] { store->LoadSubosGovernance(tasks, cur_name, true); },
-                            !loading,
-                            icons::RefreshIcon(),
-                            true
-                        )
+                            loading
+                        ).Key("subos-refresh-policy-btn")
                     ),
                     Flow {
                         StatusBadge(
@@ -1018,14 +1016,11 @@ View SubosSessionsTabView(
                     SectionHeader(
                         "运行中会话 (subos ps)",
                         "共 " + std::to_string(sessions.size()) + " 个活跃后台会话",
-                        ActionButton(
-                            loading ? "刷新中..." : "刷新数据",
-                            ButtonTone::Secondary,
+                        RefreshButton(
+                            "刷新数据",
                             [store, tasks, cur_name] { store->LoadSubosGovernance(tasks, cur_name, true); },
-                            !loading,
-                            icons::RefreshIcon(),
-                            true
-                        )
+                            loading
+                        ).Key("subos-refresh-sessions-btn")
                     ),
                     ps_rows.empty()
                         ? Text("当前没有运行中的 SubOS 会话", TextRole::Body)
@@ -1457,16 +1452,13 @@ View SubosPage() {
             tab_content = Column {
                 Row {
                     Flow(std::move(kind_chips)).With(Spacing(6.0F)).With(Grow(1.0F)),
-                    ActionButton(
+                    RefreshButton(
                         "刷新事件",
-                        ButtonTone::Secondary,
                         [store, tasks, name = cur.name, event_kind] {
                             store->LoadSubosDetail(tasks, name, event_kind.Get());
                         },
-                        true,
-                        icons::RefreshIcon(),
-                        true
-                    ),
+                        loading_detail
+                    ).Key("subos-refresh-events-btn"),
                 }.With(Spacing(8.0F), CrossAlign(CrossAxisAlignment::Center)),
                 ev_rows.empty()
                     ? EmptyState(icons::SubosIcon(), "暂无审计事件", "在沙箱或会话中运行命令后，审计记录将显示在此处")
@@ -1485,10 +1477,10 @@ View SubosPage() {
                             .Style(TextStyle{
                                 .font = Font::System(19.0F).WithWeight(FontWeight::Bold),
                                 .foreground = theme.colors.on_surface,
-                            })
-                            .With(Grow(1.0F)),
-                        loading_detail ? View(ProgressCircle().With(Frame{.width = 18.0F, .height = 18.0F})) : View{},
+                            }),
                         cur.active ? StatusBadge("当前活跃", sp.success, sp.success_bg) : View{},
+                        Spacer{}.With(Grow(1.0F)),
+                        LoadingIndicatorSlot(loading_detail, 16.0F),
                     }.With(Spacing(8.0F), CrossAlign(CrossAxisAlignment::Center)),
                     KeyValueRow("目录", cur.dir, false, true),
                     KeyValueRow("架构 / 视图", cur.abi + " · " + cur.kind + " (" + cur.view + ")"),

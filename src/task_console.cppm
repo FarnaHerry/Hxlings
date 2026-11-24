@@ -29,13 +29,19 @@ View TaskConsole() {
     const std::optional<float> progress = store->task_progress.Get();
     const auto& lines = store->console_lines.Get();
 
-    View status_indicator = running
-                                ? View(ProgressCircle().With(Frame{.width = 16.0F, .height = 16.0F}))
-                                : View(Row{}.With(
-                                      Frame{.width = 9.0F, .height = 9.0F},
-                                      CornerRadius(5.0F),
-                                      Background(failed ? sp.danger : sp.success)
-                                  ));
+    View status_indicator = Row {
+        running
+            ? InlineSpinner(16.0F, theme.colors.primary)
+            : View(Row{}.With(
+                  Frame{.width = 9.0F, .height = 9.0F},
+                  CornerRadius(5.0F),
+                  Background(failed ? sp.danger : sp.success)
+              )),
+    }.With(
+        Frame{.width = 16.0F, .height = 16.0F},
+        MainAlign(MainAxisAlignment::Center),
+        CrossAlign(CrossAxisAlignment::Center)
+    );
 
     View progress_view = View{};
     if (running) {

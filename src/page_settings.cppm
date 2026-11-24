@@ -168,14 +168,11 @@ View ConfigCliExtensionsCard(
             SectionHeader(
                 "CLI 主题、默认运行时与离线归档",
                 "管理 `xlings config --theme`、`--runtime` 与 `--add-archives/--rm-archives`",
-                ActionButton(
-                    loading_themes ? "加载中..." : "刷新主题列表",
-                    ButtonTone::Secondary,
+                RefreshButton(
+                    "刷新主题列表",
                     [store, tasks] { store->RefreshConfigThemes(tasks, true); },
-                    !loading_themes,
-                    icons::RefreshIcon(),
-                    true
-                )
+                    loading_themes
+                ).Key("settings-refresh-themes-btn")
             ),
             Text(
                 "CLI 配色主题 (当前: " + (cfg.theme.empty() ? std::string("default") : cfg.theme) + ")",
@@ -284,6 +281,8 @@ View NetworkProbeCard(
     const auto& probe = store->network_probe_result.Get();
     const bool loading_net = store->loading_network.Get();
     const bool probing = store->probing_url.Get();
+    const std::string& probing_target = store->probing_target_url.Get();
+    const bool probing_custom = store->probing_custom_url.Get();
 
     auto custom_url = UseState(TextEditingValue::FromText("https://github.com/FarnaHerry/Hxlings"));
 
@@ -312,12 +311,13 @@ View NetworkProbeCard(
                     ExternalLinkRow(ep.url, "net-ep-" + std::to_string(i)),
                 }.With(Spacing(4.0F), Grow(1.0F), CrossAlign(CrossAxisAlignment::Stretch)),
                 ActionButton(
-                    probing ? "探测中" : "探测",
+                    "探测",
                     ButtonTone::Secondary,
-                    [store, tasks, toast, url = ep.url] { store->ProbeNetworkUrlAsync(tasks, toast, url); },
+                    [store, tasks, toast, url = ep.url] { store->ProbeNetworkUrlAsync(tasks, toast, url, false); },
                     !probing,
                     icons::GlobeIcon(),
-                    true
+                    true,
+                    probing && !probing_custom && probing_target == ep.url
                 ),
             }.With(
                 Padding(EdgeInsets::Symmetric(10.0F, 8.0F)),
@@ -367,14 +367,11 @@ View NetworkProbeCard(
             SectionHeader(
                 "网络端点发现与连通性探测",
                 "查询 `interface network_endpoints` 并通过 `interface probe_url` 测试下载链路延迟",
-                ActionButton(
-                    loading_net ? "刷新中..." : "刷新端点",
-                    ButtonTone::Secondary,
+                RefreshButton(
+                    "刷新端点",
                     [store, tasks] { store->RefreshNetworkEndpoints(tasks, true); },
-                    !loading_net,
-                    icons::RefreshIcon(),
-                    true
-                )
+                    loading_net
+                ).Key("settings-refresh-net-btn")
             ),
             ep_rows.empty()
                 ? Text("暂无网络端点记录（点击右上角刷新端点）", TextRole::Body)
@@ -387,14 +384,15 @@ View NetworkProbeCard(
                     .OnChanged([custom_url](const TextEditingValue& v) mutable { custom_url = v; })
                     .With(Grow(1.0F)),
                 ActionButton(
-                    probing ? "探测中..." : "立即探测",
+                    "立即探测",
                     ButtonTone::Primary,
                     [store, tasks, toast, custom_url] {
-                        store->ProbeNetworkUrlAsync(tasks, toast, custom_url.Get().text);
+                        store->ProbeNetworkUrlAsync(tasks, toast, custom_url.Get().text, true);
                     },
                     !probing,
                     icons::GlobeIcon(),
-                    true
+                    true,
+                    probing && probing_custom
                 ),
             }.With(Spacing(8.0F), CrossAlign(CrossAxisAlignment::Center)),
             std::move(probe_summary),
@@ -435,7 +433,7 @@ View ScriptRunnerCard(
             }.With(Spacing(8.0F), CrossAlign(CrossAxisAlignment::End)),
             Row {
                 ActionButton(
-                    running ? "运行中..." : "运行脚本",
+                    "运行脚本",
                     ButtonTone::Primary,
                     [store, tasks, toast, script_file, script_args] {
                         store->RunScriptAsync(
@@ -445,9 +443,10 @@ View ScriptRunnerCard(
                             detail::SplitWhitespaceTokens(script_args.Get().text)
                         );
                     },
-                    !running,
+                    true,
                     icons::FileCodeIcon(),
-                    true
+                    true,
+                    running
                 ),
             },
             CodeBox(output, 100.0F, 210.0F),
@@ -575,12 +574,12 @@ View AppUpdateSection(
 
     std::vector<View> action_buttons;
     action_buttons.push_back(
-        ActionButton(
-            checking ? "检查中..." : "检查更新",
-            ButtonTone::Secondary,
+        RefreshButton(
+            "检查更新",
             [store, tasks, toast, http] { store->CheckForAppUpdateAsync(tasks, toast, http); },
+            checking,
+            ButtonTone::Secondary,
             !is_busy,
-            icons::RefreshIcon(),
             true
         ).Key("about-check-update-btn")
     );
@@ -655,7 +654,6 @@ View AppUpdateSection(
             Text("软件自更新", TextRole::Label)
                 .Style(TextStyle{.font = Font::System(13.5F).WithWeight(FontWeight::SemiBold)}),
             StatusBadge(badge_text, badge_fg, badge_bg),
-            is_busy ? View(ProgressCircle().With(Frame{.width = 15.0F, .height = 15.0F})) : View{},
             Spacer{}.With(Grow(1.0F)),
             upd.checked_at.empty()
                 ? View{}
@@ -792,19 +790,11 @@ View SettingsPage() {
             SectionHeader(
                 "xlings 核心配置",
                 "修改将直接写入 xlings 全局配置（仅在进入本标签页时按需读取）",
-                Row {
+                RefreshButton(
+                    "重新读取配置",
+                    [store, tasks] { store->RefreshXlingsConfig(tasks, true); },
                     loading_cfg
-                        ? View(ProgressCircle().With(Frame{.width = 16.0F, .height = 16.0F}))
-                        : View{},
-                    ActionButton(
-                        "重新读取配置",
-                        ButtonTone::Secondary,
-                        [store, tasks] { store->RefreshXlingsConfig(tasks, true); },
-                        !loading_cfg,
-                        icons::RefreshIcon(),
-                        true
-                    ),
-                }.With(Spacing(8.0F), CrossAlign(CrossAxisAlignment::Center))
+                ).Key("settings-refresh-cfg-btn")
             ),
             Row {
                 Column {
@@ -1025,17 +1015,11 @@ View SettingsPage() {
                     .Style(TextStyle{.font = Font::System(14.5F).WithWeight(FontWeight::SemiBold),
                                      .foreground = theme.colors.on_surface})
                     .With(Grow(1.0F)),
-                loading_prof
-                    ? View(ProgressCircle().With(Frame{.width = 15.0F, .height = 15.0F}))
-                    : View{},
-                ActionButton(
+                RefreshButton(
                     "刷新代际",
-                    ButtonTone::Secondary,
                     [store, tasks] { store->RefreshProfiles(tasks, true); },
-                    !loading_prof,
-                    icons::RefreshIcon(),
-                    true
-                ),
+                    loading_prof
+                ).Key("settings-refresh-profiles-btn"),
             }.With(Spacing(8.0F), CrossAlign(CrossAxisAlignment::Center)),
             Row {
                 TextField(commit_reason)

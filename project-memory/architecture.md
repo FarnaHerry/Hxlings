@@ -10,6 +10,7 @@
 - **客户端基础设施层**：
   - `hxlings.settings`（`src/app_settings.cppm`）：客户端本地 JSON 配置持久化（`os::dirs::config()/hxlings/settings.json`）。
   - `hxlings.platform_icon`（`src/platform_icon.cppm`）：Linux/macOS/Windows 启动环境适配、应用/窗口图标设置及原生主题同步 `ApplyPlatformThemeMode`（Windows `uxtheme.dll`/`dwmapi.dll`、macOS `[NSApp setAppearance:]`、Linux GTK `gtk-application-prefer-dark-theme`）。
+  - `hxlings.single_instance`（`src/single_instance.cppm`）：基于 `mcpplibs.os.ipc` 本地 rendezvous 套接字的跨平台单实例守护与二次启动唤醒协议（Windows 通过 `AllowSetForegroundWindow` 授予主实例前台权限；支持应用退出与自更新重启提前释放）。
   - `hxlings.updater`（`src/app_updater.cppm`）：GitHub Releases 自更新核心（`kAppVersion`、Release/Asset 解析、FIPS 180-4 SHA-256 校验、平台包选型与安装/AppImage 原子替换拉起）。
   - `hxlings.shortcuts`（`src/shortcuts.cppm`）：macOS（`⌘`）与 Linux/Windows（`Ctrl`）跨平台快捷键映射与帮助弹窗数据。
   - `hxlings.theme`（`src/theme.cppm`）与 `hxlings.icons`（`src/icons.cppm`）：主题色板（含 `BrandPresets()`）、语义状态色与内联矢量图标。
@@ -17,7 +18,7 @@
 - **状态与视图层**：
   - `hxlings.store`（`src/store.cppm`）：统一应用状态容器 `XlingsStore`（继承 `std::enable_shared_from_this`）与异步任务编排。
   - `hxlings.components`（`src/components.cppm`）、`hxlings.console`（`src/task_console.cppm`）及 6 个页面模块 `hxlings.page.{dashboard,packages,store,subos,indexes,settings}`。
-  - `app`（`src/app.cppm`）与入口 `src/main.cpp`（调用 `PreparePlatformStartup()` 后进入 `huxerui::RunApplication()`）。
+  - `app`（`src/app.cppm`）与入口 `src/main.cpp`（先通过 `ProcessSingleInstanceScope::AcquireDefault()` 获取单实例控制权，再调用 `PreparePlatformStartup()` 后进入 `huxerui::RunApplication()`）。
 
 ## 2. 渐进式并发加载与按需懒加载
 

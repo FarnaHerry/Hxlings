@@ -195,14 +195,11 @@ View IndexesPage() {
                 "索引仓库 (Index Repositories)",
                 "管理全局 xim 包索引仓库及远程地址",
                 Row {
-                    ActionButton(
+                    RefreshButton(
                         "刷新索引与快照",
-                        ButtonTone::Secondary,
                         [store, tasks] { store->RefreshIndexes(tasks, true); },
-                        !loading_indexes && !loading_idx_versions,
-                        icons::RefreshIcon(),
-                        true
-                    ),
+                        loading_indexes || loading_idx_versions
+                    ).Key("indexes-refresh-btn"),
                     ActionButton(
                         "添加 / 更新仓库",
                         ButtonTone::Primary,
@@ -413,7 +410,7 @@ View IndexesPage() {
             sections.push_back(
                 Card(
                     Row {
-                        ProgressCircle().With(Frame{.width = 16.0F, .height = 16.0F}),
+                        InlineSpinner(16.0F, theme.colors.primary),
                         Column {
                             Text("正在后台查询远程索引快照版本...", TextRole::Body)
                                 .Style(TextStyle{.font = Font::System(13.5F).WithWeight(FontWeight::SemiBold),
@@ -435,13 +432,10 @@ View IndexesPage() {
                             Text("点击右侧按钮按需拉取历史索引快照与固定状态", TextRole::Label)
                                 .Style(TextStyle{.foreground = theme.colors.on_surface_variant}),
                         }.With(Spacing(2.0F), Grow(1.0F)),
-                        ActionButton(
+                        RefreshButton(
                             "立即查询快照",
-                            ButtonTone::Secondary,
                             [store, tasks] { store->RefreshIndexes(tasks, true); },
-                            true,
-                            icons::RefreshIcon(),
-                            true
+                            loading_idx_versions
                         ),
                     }.With(Spacing(12.0F), CrossAlign(CrossAxisAlignment::Center))
                 )
