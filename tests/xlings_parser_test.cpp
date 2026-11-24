@@ -9,6 +9,9 @@ import hxlings.settings;
 import hxlings.platform_icon;
 import hxlings.updater;
 import hxlings.single_instance;
+import hxlings.luban.types;
+import hxlings.luban.client;
+import hxlings.luban.stack;
 
 using namespace hxlings;
 
@@ -1000,6 +1003,355 @@ void TestSingleInstanceGuard() {
     std::filesystem::remove_all(tmp_dir, ec);
 }
 
+void TestLubanParsersAndStackEngine() {
+    // 1. Parse host status JSON (with leading [warn] lines matching real luban output)
+    {
+        const std::string status_raw =
+            "[warn] index hint line\n"
+            R"json({
+  "arch": "x86_64",
+  "os": "Linux 7.3.4",
+  "ready": true,
+  "isolation": {
+    "backend": {"name": "bwrap", "path": "/usr/bin/bwrap", "source": "system"},
+    "gates": [
+      {"gate": "FsGate", "enforced": "kernel", "reason": "bwrap mount namespace", "supported": true},
+      {"gate": "NetGate", "enforced": "kernel", "reason": "net namespace", "supported": true}
+    ],
+    "tools": [
+      {"name": "bwrap", "package": "bwrap", "path": "/usr/bin/bwrap", "source": "system"},
+      {"name": "hdiutil", "package": "", "install": "", "path": null, "platform": "macos"},
+      {"name": "virtiofsd", "package": "virtiofsd", "install": "xlings install virtiofsd", "path": null, "platform": "linux"}
+    ]
+  },
+  "modes": [
+    {"name": "sandbox", "ready": true, "how": "isolated here (bwrap)"},
+    {"name": "machine", "ready": true, "how": "its own kernel (KVM)"},
+    {"name": "desktop", "ready": false, "reason": "luban-os not installed", "route": "xlings install luban-os"}
+  ],
+  "versions": {
+    "xlings": "2026.11.23.1",
+    "luban": "2026.11.23.1",
+    "luban-os": "",
+    "protocol": "1.19",
+    "index": "c54a116",
+    "running": ["dev-box"]
+  }
+})json";
+        const LubanHostStatus st = ParseLubanStatusJson(status_raw);
+        Check(st.ready && st.os == "Linux 7.3.4" && st.arch == "x86_64", "Luban host basic fields parsed");
+        Check(st.backend_name == "bwrap" && st.backend_source == "system", "Luban host isolation backend parsed");
+        Check(st.sandbox_ready && st.machine_ready && !st.desktop_ready, "Luban host modes parsed");
+        Check(st.desktop_route == "xlings install luban-os", "Luban desktop install route preserved");
+        Check(st.gates.size() == 2 && st.gates[0].gate == "FsGate" && st.gates[0].supported, "Luban gates parsed");
+        Check(st.missing_tools.size() == 1 && st.missing_tools[0].name == "virtiofsd" &&
+                  st.missing_tools[0].install_cmd == "xlings install virtiofsd",
+              "Luban missing tools excludes cross-OS null-install tools and retains virtiofsd");
+        Check(st.luban_version == "2026.11.23.1" && st.protocol_version == "1.19" &&
+                  st.running_envs.size() == 1 && st.running_envs[0] == "dev-box",
+              "Luban versions and running envs parsed");
+    }
+
+    // 2. Parse luban ls --json & luban search --json
+    {
+        const std::string ls_raw = R"json({
+  "environments": [
+    {"name": "dev-box", "kind": "rootfs", "edition": "luban:core", "carrier": "local", "shell": "fish", "desktops": ["xdesk"], "packages": 19, "running": true},
+    {"name": "my_host_env", "kind": "view", "edition": "", "carrier": "local", "shell": "", "desktops": [], "packages": 0, "running": false}
+  ],
+  "place": "host"
+})json";
+        const auto envs = ParseLubanLsJson(ls_raw);
+        Check(envs.size() == 2, "ParseLubanLsJson parsed 2 environments");
+        Check(envs[0].name == "dev-box" && envs[0].kind == "rootfs" && envs[0].running && envs[0].packages == 19 &&
+                  envs[0].desktops.size() == 1 && envs[0].desktops[0] == "xdesk",
+              "Luban rootfs running environment fields parsed");
+        Check(envs[1].name == "my_host_env" && envs[1].kind == "view" && !envs[1].running,
+              "Luban view environment fields parsed");
+
+        const std::string search_raw = R"json({
+  "groups": [
+    {"group": "distributions", "items": [
+      {"name": "core", "ref": "luban:core", "version": "2026.10.24.1", "status": "stable", "source": "official", "available": true, "highlights": ["gcc", "cmake"], "description": "Luban Core"}
+    ]},
+    {"group": "desktops", "items": [
+      {"name": "xdesk", "ref": "luban:xdesk", "version": "2026.10.24.2", "status": "stable", "source": "official", "tier": 5, "available": true, "title": {"en": "xdesk", "zh": "xdesk 桌面"}, "summary": {"en": "WuXian", "zh": "WuXian 无限画布"}, "description": "xdesk desktop"},
+      {"name": "kde", "ref": "luban:kde", "version": "6.6.6-r2", "status": "dev", "gpu": "better", "tier": 4, "available": true, "description": "KDE Plasma"}
+    ]}
+  ]
+})json";
+        const LubanCatalog cat = ParseLubanSearchJson(search_raw);
+        Check(cat.distributions.size() == 1 && cat.distributions[0].ref == "luban:core" &&
+                  cat.distributions[0].highlights.size() == 2,
+              "ParseLubanSearchJson parsed distributions");
+        Check(cat.desktops.size() == 2 && cat.desktops[0].title_zh == "xdesk 桌面" &&
+                  cat.desktops[1].gpu_hint == "better",
+              "ParseLubanSearchJson parsed desktops and i18n titles");
+    }
+
+    // 3. Parse wrapped {"result": ...} env status/config & history/logs
+    {
+        const std::string env_status_raw = R"json({
+  "result": {
+    "name": "agent-box",
+    "kind": "rootfs",
+    "edition": "luban:agent-workspace",
+    "carrier": "local",
+    "mode": "sandbox",
+    "persist": "all",
+    "enter": "console",
+    "network": "socks5h://127.0.0.1:7897",
+    "shell": "bash",
+    "desktop": "",
+    "desktops": [],
+    "needs": ["bwrap"],
+    "notes": ["private identity"],
+    "unmet": [],
+    "packages": 22,
+    "running": false
+  }
+})json";
+        const auto est = ParseLubanEnvStatusJson(env_status_raw);
+        Check(est.has_value() && est->name == "agent-box" && est->network == "socks5h://127.0.0.1:7897" &&
+                  est->needs.size() == 1 && est->notes.size() == 1,
+              "ParseLubanEnvStatusJson unwraps result payload");
+
+        const std::string env_cfg_raw = R"json({
+  "result": {
+    "name": "agent-box",
+    "mode": "sandbox",
+    "persist": "all",
+    "shell": "bash",
+    "desktop": "",
+    "on_close": "background",
+    "files": "virtiofs",
+    "kernel": "",
+    "isolation": {
+      "extends": "xim:agent-private@2026.10.11.1",
+      "source": "policy",
+      "mounts": ["/home/demo/repo:/work:rw"],
+      "observe": {"level": "standard"},
+      "permissions": {"fetch": {"default": "ask"}, "index_update": "auto"},
+      "isolation": {
+        "net": "proxy",
+        "proxy": "socks5h://127.0.0.1:7897",
+        "no_degrade": true,
+        "grants": ["clipboard"],
+        "grants_allowed": ["audio", "clipboard", "gpu"],
+        "env_pass": ["EDITOR"]
+      }
+    }
+  }
+})json";
+        const auto ecfg = ParseLubanEnvConfigJson(env_cfg_raw);
+        Check(ecfg.has_value() && ecfg->mode == "sandbox" && ecfg->net == "proxy" &&
+                  ecfg->proxy == "socks5h://127.0.0.1:7897" && ecfg->observe_level == "standard" &&
+                  ecfg->fetch_policy == "ask" && ecfg->no_degrade &&
+                  ecfg->grants.size() == 1 && ecfg->mounts.size() == 1,
+              "ParseLubanEnvConfigJson unwraps nested isolation configuration");
+
+        const std::string hist_err =
+            R"({"event":"error","hint":"xlings use pkg --subos my_host_env","text":"cannot rollback 'my_host_env'"})";
+        const std::string hist_fmt = FormatLubanHistoryText(hist_err);
+        Check(hist_fmt.find("cannot rollback") != std::string::npos &&
+                  hist_fmt.find("提示:") != std::string::npos,
+              "FormatLubanHistoryText extracts error and hint");
+
+        Check(FormatLubanLogsText("[]") == "暂无日志记录", "FormatLubanLogsText handles empty array");
+        const std::string logs_fmt = FormatLubanLogsText(
+            R"([{"timestamp":"2026-11-24 23:00:00","source":"xdesk","text":"started"}])");
+        Check(logs_fmt == "[2026-11-24 23:00:00] [xdesk] started", "FormatLubanLogsText formats entries");
+    }
+
+    // 4. Argv builders
+    {
+        LubanCreateOptions co;
+        co.name = "devbox";
+        co.edition = "core";
+        co.desktop = "xdesk";
+        co.mode = "machine";
+        co.persist = "all";
+        co.policy = "dev";
+        co.xpkgs = {"xim:llvm", "xim:cmake"};
+        co.allows = {"gpu", "clipboard"};
+        co.no_password = true;
+        co.dry_run = true;
+        const auto new_args = BuildLubanNewArgs(co);
+        Check(new_args.size() >= 18 && new_args[0] == "new" && new_args[1] == "devbox" &&
+                  std::ranges::count(new_args, "--xpkg") == 2 &&
+                  std::ranges::count(new_args, "--allow") == 2 &&
+                  std::ranges::find(new_args, "--no-password") != new_args.end() &&
+                  std::ranges::find(new_args, "--dry-run") != new_args.end() &&
+                  new_args.back() == "--yes",
+              "BuildLubanNewArgs includes all expected options and flags");
+
+        LubanConfigPatch patch;
+        patch.mode = "sandbox";
+        patch.proxy = "socks5h://127.0.0.1:7897";
+        patch.allow = {"gpu"};
+        patch.mounts = {"/a:/b:ro"};
+        const auto cfg_args = BuildLubanConfigArgs("devbox", patch);
+        Check(cfg_args.size() >= 8 && cfg_args[0] == "config" && cfg_args[1] == "devbox" &&
+                  std::ranges::find(cfg_args, "--mode") != cfg_args.end() &&
+                  std::ranges::find(cfg_args, "--proxy") != cfg_args.end() &&
+                  std::ranges::find(cfg_args, "--allow") != cfg_args.end() &&
+                  std::ranges::find(cfg_args, "--mount") != cfg_args.end(),
+              "BuildLubanConfigArgs emits non-empty patch flags");
+
+        const auto exp_args = BuildLubanExportArgs({
+            .name = "devbox",
+            .file_path = "/tmp/devbox.qcow2",
+            .format = "qcow2",
+            .size = "8G",
+            .boot = "virt",
+        });
+        Check(exp_args[0] == "export" && exp_args[1] == "devbox" && exp_args[2] == "/tmp/devbox.qcow2" &&
+                  std::ranges::find(exp_args, "--format") != exp_args.end() &&
+                  std::ranges::find(exp_args, "--size") != exp_args.end() &&
+                  std::ranges::find(exp_args, "--boot") != exp_args.end(),
+              "BuildLubanExportArgs constructs export invocation");
+    }
+
+    // 5. Declarative stack JSON & TOML parsing, validation & round-trip
+    {
+        const std::string toml_doc = R"toml(
+# Comment line
+schema = "hxlings.luban-stack/v1"
+name = "team-stack" # inline comment
+description = "Demo # sharp in quotes"
+
+[[environments]]
+name = "cpp-box"
+edition = 'core'
+mode = "sandbox"
+persist = "all"
+policy = "dev"
+xpkgs = [
+  "xim:llvm@22.1.8",
+  "xim:cmake@4.5.0", # trailing comment
+]
+allows = ["clipboard"]
+mounts = ["~/dev:/work:rw"]
+no_password = true
+
+[[environments]]
+name = "agent-box"
+edition = "agent-workspace"
+policy = "xim:agent-private"
+proxy = "socks5h://127.0.0.1:7897"
+fetch = "ask"
+observe = "standard"
+)toml";
+        const LubanStackParseResult parsed = ParseLubanStackAuto(toml_doc);
+        Check(parsed.ok && parsed.detected_format == "toml" && parsed.spec.name == "team-stack" &&
+                  parsed.spec.description == "Demo # sharp in quotes" && parsed.spec.environments.size() == 2,
+              "ParseLubanStackAuto parses TOML with comments and multi-line arrays");
+        Check(parsed.spec.environments[0].xpkgs.size() == 2 && parsed.spec.environments[0].no_password &&
+                  parsed.spec.environments[1].proxy == "socks5h://127.0.0.1:7897",
+              "TOML environment fields match expected values");
+
+        const std::string json_rt = SerializeLubanStackJson(parsed.spec);
+        const LubanStackParseResult reparsed_json = ParseLubanStackAuto(json_rt);
+        Check(reparsed_json.ok && reparsed_json.detected_format == "json" && reparsed_json.spec == parsed.spec,
+              "LubanStack JSON serialize -> parse round-trip preserves spec");
+
+        const std::string toml_rt = SerializeLubanStackToml(parsed.spec);
+        const LubanStackParseResult reparsed_toml = ParseLubanStackAuto(toml_rt);
+        Check(reparsed_toml.ok && reparsed_toml.detected_format == "toml" && reparsed_toml.spec == parsed.spec,
+              "LubanStack TOML serialize -> parse round-trip preserves spec");
+
+        // Validation failure checks
+        const auto bad_reserved = ParseLubanStackJson(R"({"name":"bad","environments":[{"name":"default"}]})");
+        Check(!bad_reserved.ok && !bad_reserved.errors.empty(), "Rejects reserved environment name 'default'");
+
+        const auto bad_dup = ParseLubanStackJson(
+            R"({"name":"bad","environments":[{"name":"dup"},{"name":"dup"}]})");
+        Check(!bad_dup.ok, "Rejects duplicate environment names");
+
+        const auto bad_mode = ParseLubanStackJson(
+            R"({"name":"bad","environments":[{"name":"box1","mode":"docker"}]})");
+        Check(!bad_mode.ok, "Rejects invalid mode value");
+
+        const auto bad_proxy = ParseLubanStackJson(
+            R"({"name":"bad","environments":[{"name":"agent1","edition":"agent-workspace","policy":"xim:agent-private"}]})");
+        Check(!bad_proxy.ok, "Rejects agent-workspace / agent-private without proxy");
+    }
+
+    // 6. Diff plan, export & builtin blueprints
+    {
+        LubanStackSpec spec;
+        spec.name = "plan-test";
+        spec.environments = {
+            LubanStackEnvSpec{.name = "env-create", .edition = "core", .mode = "sandbox"},
+            LubanStackEnvSpec{.name = "env-match", .edition = "core", .mode = "sandbox", .persist = "all", .policy = "dev"},
+            LubanStackEnvSpec{
+                .name = "env-drift",
+                .edition = "core",
+                .mode = "machine",
+                .persist = "home",
+                .allows = {"gpu"},
+            },
+        };
+        const std::vector<LubanEnvironment> existing{
+            LubanEnvironment{.name = "default", .kind = "view"},
+            LubanEnvironment{.name = "env-match", .kind = "rootfs", .edition = "luban:core"},
+            LubanEnvironment{.name = "env-drift", .kind = "rootfs", .edition = "luban:core"},
+        };
+        const std::map<std::string, LubanEnvConfigDetail> cfgs{
+            {"env-match", LubanEnvConfigDetail{.name = "env-match", .mode = "sandbox", .persist = "all", .policy_extends = "dev"}},
+            {"env-drift", LubanEnvConfigDetail{.name = "env-drift", .mode = "sandbox", .persist = "all", .grants = {}}},
+        };
+
+        const LubanStackPlan plan = BuildLubanStackPlan(spec, existing, cfgs);
+        Check(plan.create_count == 1 && plan.unchanged_count == 1 && plan.configure_count == 1 &&
+                  plan.actions.size() == 3,
+              "BuildLubanStackPlan produces 1 Create, 1 UpToDate, 1 Configure");
+        Check(plan.actions[2].kind == LubanStackActionKind::Configure &&
+                  plan.actions[2].config_patch.mode == std::optional<std::string>("machine") &&
+                  plan.actions[2].config_patch.persist == std::optional<std::string>("home") &&
+                  plan.actions[2].config_patch.allow == std::vector<std::string>{"gpu"},
+              "BuildLubanStackPlan computes minimal config diff patch");
+
+        const LubanStackSpec exported = ExportEnvironmentsToStack("snap", existing, cfgs);
+        Check(exported.environments.size() == 2 && exported.environments[0].name == "env-match",
+              "ExportEnvironmentsToStack omits reserved 'default' environment");
+
+        const auto builtins = BuiltinLubanStacks();
+        Check(builtins.size() == 3, "BuiltinLubanStacks provides 3 blueprints");
+        for (const auto& b : builtins) {
+            Check(ValidateLubanStackSpec(b).empty(), "Builtin stack '" + b.name + "' validates cleanly");
+        }
+    }
+
+    // 7. Blueprint file persistence in isolated temp dir
+    {
+        std::error_code ec;
+        std::filesystem::path temp_base = mcpplibs::os::dirs::temp();
+        if (temp_base.empty()) temp_base = std::filesystem::temp_directory_path(ec);
+        const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+        const auto stack_dir = temp_base / ("hxl-luban-stacks-" + std::to_string(stamp));
+        std::filesystem::remove_all(stack_dir, ec);
+
+        const auto builtins = BuiltinLubanStacks();
+        const std::string toml_text = SerializeLubanStackToml(builtins.front());
+        const auto saved_path = SaveLubanStackFile("My Demo Stack", toml_text, "toml", stack_dir);
+        Check(saved_path.has_value() && std::filesystem::exists(*saved_path, ec),
+              "SaveLubanStackFile saves TOML blueprint atomically");
+
+        const auto listed = ListSavedLubanStacks(stack_dir);
+        Check(listed.size() == 1 && listed[0].format == "toml" && listed[0].env_count == 2,
+              "ListSavedLubanStacks lists saved TOML blueprint");
+
+        const auto loaded = LoadLubanStackFile(*saved_path);
+        Check(loaded.has_value() && ParseLubanStackAuto(*loaded).ok,
+              "LoadLubanStackFile reads saved blueprint back cleanly");
+
+        Check(DeleteLubanStackFile(*saved_path) && ListSavedLubanStacks(stack_dir).empty(),
+              "DeleteLubanStackFile deletes saved blueprint");
+        std::filesystem::remove_all(stack_dir, ec);
+    }
+}
+
 int main() {
     TestSplitPackageSpec();
     TestNdjsonAndEnv();
@@ -1023,6 +1375,7 @@ int main() {
     TestTimestampParsingAndFormatting();
     TestAppUpdaterParsingSha256AndSelection();
     TestSingleInstanceGuard();
+    TestLubanParsersAndStackEngine();
 
     if (failures == 0) {
         std::println("All parser and xlings integration tests passed.");
