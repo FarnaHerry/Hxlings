@@ -16,6 +16,7 @@
 #include <vector>
 
 import app;
+import hxlings.theme;
 import hxlings.shortcuts;
 import hxlings.settings;
 import hxlings.store;
@@ -1514,8 +1515,32 @@ void TestStorePaginationAndErrorStates(AuditContext& ctx, UiTest& ui, const std:
     ui.Pump();
     AuditCurrentScreen(ctx, ui, 1180.0F, 760.0F, "Store[80Results]", "page-store", true);
 
-    if (!ui.Find(UiSelector::Key("store-load-more")).Exists()) {
-        ctx.Flag("StorePagination", "Missing store-load-more button when 80 results are present");
+    if (ui.Find(UiSelector::Key("store-load-more")).Exists()) {
+        ctx.Flag("StoreVirtualScroll", "Manual store-load-more button should not exist");
+    }
+    if (!ui.Find(UiSelector::Key("store-results-list")).Exists()) {
+        ctx.Flag("StoreVirtualScroll", "Missing store-results-list virtual list");
+    }
+    if (!ui.Find(UiSelector::Key("search-xim:pkg-0-0")).Exists()) {
+        ctx.Flag("StoreVirtualScroll", "Missing initial virtualized item search-xim:pkg-0-0");
+    }
+    if (ui.Find(UiSelector::Key("search-xim:pkg-79-79")).Exists()) {
+        ctx.Flag("StoreVirtualScroll", "Tail item search-xim:pkg-79-79 should not be eagerly mounted before scrolling");
+    }
+
+    try {
+        auto list_q = ui.Find(UiSelector::Key("store-results-list"));
+        auto tail_q = list_q.ScrollUntil(
+            UiSelector::Key("search-xim:pkg-79-79"),
+            {.step = {0.0F, 420.0F}, .maximum_steps = 30}
+        );
+        ui.Pump();
+        if (!tail_q.Exists() || !tail_q.One().in_viewport) {
+            ctx.Flag("StoreVirtualScroll", "Scrolling store-results-list did not reveal search-xim:pkg-79-79");
+        }
+        AuditCurrentScreen(ctx, ui, 1180.0F, 760.0F, "Store[80ResultsScrolled]", "page-store", true);
+    } catch (const UiTestFailure& ex) {
+        ctx.Flag("StoreVirtualScroll", std::string("ScrollUntil search-xim:pkg-79-79 failed: ") + ex.what());
     }
 
     store->search_results = std::vector<SearchPkg>{};
@@ -1528,6 +1553,232 @@ void TestStorePaginationAndErrorStates(AuditContext& ctx, UiTest& ui, const std:
 
     store->search_error = saved_error;
     store->search_results = saved_results;
+    ui.Pump();
+}
+
+void TestSearchBoxes(AuditContext& ctx, UiTest& ui, const std::shared_ptr<XlingsStore>& store) {
+    ui.SetWindowMetrics({.viewport = {1180.0F, 760.0F}});
+    store->selected_subos = "default";
+    ui.Pump();
+
+    auto verify_search_box = [&](int nav_idx,
+                                 const std::string& page_key,
+                                 const std::string& input_key,
+                                 bool has_split,
+                                 const std::string& sample_text) {
+        const std::string scope = "SearchBox[" + input_key + "]";
+        store->active_nav = nav_idx;
+        ui.Pump();
+
+        if (ui.Find(UiSelector::Key("store-search-clear")).Exists()) {
+            ctx.Flag(scope, "External store-search-clear button should not exist");
+        }
+
+        const auto field_q = ui.Find(UiSelector::Key(input_key));
+        if (!field_q.Exists()) {
+            ctx.Flag(scope, "Missing search input key: " + input_key);
+            return;
+        }
+        if (field_q.One().value.value_or("") != "") {
+            ctx.Flag(scope, "Expected initial empty value, got '" + field_q.One().value.value_or("") + "'");
+        }
+
+        const auto clear_q = ui.FindSemantics(UiSemanticSelector::AllOf(
+            UiSemanticSelector::Role(SemanticRole::Button),
+            UiSemanticSelector::Label("清空搜索")
+        ));
+        if (clear_q.Exists()) {
+            ctx.Flag(scope, "Clear button semantic node should be hidden when input is empty");
+        }
+
+        field_q.Tap();
+        field_q.EnterText(sample_text);
+        if (field_q.One().value.value_or("") != sample_text) {
+            ctx.Flag(scope, "EnterText failed: expected '" + sample_text + "', got '" +
+                                field_q.One().value.value_or("") + "'");
+            return;
+        }
+        if (clear_q.Count() != 1) {
+            ctx.Flag(scope, "Expected 1 clear button semantic node after text entry, got " +
+                                std::to_string(clear_q.Count()));
+            return;
+        }
+
+        const Rect field_bounds = field_q.One().bounds;
+        const Rect clear_bounds = clear_q.One().bounds;
+        if (clear_bounds.x < field_bounds.x - 0.5F ||
+            clear_bounds.y < field_bounds.y - 0.5F ||
+            clear_bounds.x + clear_bounds.width > field_bounds.x + field_bounds.width + 0.5F ||
+            clear_bounds.y + clear_bounds.height > field_bounds.y + field_bounds.height + 0.5F) {
+            ctx.Flag(scope, "Clear button bounds " + FmtRect(clear_bounds) +
+                                " not contained in search input bounds " + FmtRect(field_bounds));
+        }
+        if (clear_bounds.x < field_bounds.x + field_bounds.width * 0.5F) {
+            ctx.Flag(scope, "Clear button bounds " + FmtRect(clear_bounds) +
+                                " not on trailing half of " + FmtRect(field_bounds));
+        }
+        if (std::abs(clear_bounds.width - clear_bounds.height) >= 0.5F ||
+            clear_bounds.width < 24.0F || clear_bounds.width > 30.0F) {
+            ctx.Flag(scope, "Unexpected clear button action size: " + FmtRect(clear_bounds));
+        }
+
+        AuditCurrentScreen(ctx, ui, 1180.0F, 760.0F, "SearchPopulated[" + input_key + "]", page_key, has_split);
+
+        const Point clear_center{
+            clear_bounds.x + clear_bounds.width * 0.5F,
+            clear_bounds.y + clear_bounds.height * 0.5F,
+        };
+        ui.SendPointer(PointerEvent{
+            .type = PointerEventType::Move,
+            .pointer_id = 50,
+            .position = {0.0F, 0.0F},
+            .device_kind = PointerDeviceKind::Mouse,
+        });
+        ui.Pump();
+        const UiSnapshot before_hover = ui.CaptureSnapshot();
+
+        ui.SendPointer(PointerEvent{
+            .type = PointerEventType::Move,
+            .pointer_id = 50,
+            .position = clear_center,
+            .device_kind = PointerDeviceKind::Mouse,
+        });
+        ui.Pump();
+        const UiSnapshot after_hover = ui.CaptureSnapshot();
+        if (before_hover == after_hover) {
+            ctx.Flag(scope, "Hovering internal clear button did not update visual snapshot");
+        }
+
+        ui.TapAt(clear_center, {.device_kind = PointerDeviceKind::Mouse, .pointer_id = 51});
+        ui.Pump();
+        ui.SendPointer(PointerEvent{
+            .type = PointerEventType::Move,
+            .pointer_id = 50,
+            .position = {0.0F, 0.0F},
+            .device_kind = PointerDeviceKind::Mouse,
+        });
+        ui.Pump();
+
+        if (field_q.One().value.value_or("") != "") {
+            ctx.Flag(scope, "Tapping internal clear button did not clear input text (got '" +
+                                field_q.One().value.value_or("") + "')");
+        }
+        if (clear_q.Exists()) {
+            ctx.Flag(scope, "Clear button semantic node still exists after clearing input");
+        }
+
+        AuditCurrentScreen(ctx, ui, 1180.0F, 760.0F, "SearchCleared[" + input_key + "]", page_key, has_split);
+    };
+
+    verify_search_box(2, "page-store", "store-search-input", true, "gcc");
+    verify_search_box(1, "page-packages", "packages-filter-input", true, "llvm");
+    verify_search_box(3, "page-subos", "subos-shim-filter-input", true, "gcc");
+
+    store->SetThemeMode(ThemeMode::Dark);
+    ui.Pump();
+    verify_search_box(2, "page-store", "store-search-input", true, "rust");
+    store->SetThemeMode(ThemeMode::Auto);
+    ui.Pump();
+}
+
+void TestThemeAndDisabledControls(AuditContext& ctx, UiTest& ui, const std::shared_ptr<XlingsStore>& store) {
+    const auto srgb_channel = [](float c) -> float {
+        return (c <= 0.04045F) ? (c / 12.92F) : std::pow((c + 0.055F) / 1.055F, 2.4F);
+    };
+    const auto srgb_luminance = [&](Color c) -> float {
+        return 0.2126F * srgb_channel(c.red) +
+               0.7152F * srgb_channel(c.green) +
+               0.0722F * srgb_channel(c.blue);
+    };
+    const auto contrast_ratio = [&](Color a, Color b) -> float {
+        const float l1 = srgb_luminance(a);
+        const float l2 = srgb_luminance(b);
+        return (std::max(l1, l2) + 0.05F) / (std::min(l1, l2) + 0.05F);
+    };
+    const auto blend_over = [](Color fg, float opacity, Color bg) -> Color {
+        const float a = std::clamp(fg.alpha * opacity, 0.0F, 1.0F);
+        return Color{
+            fg.red * a + bg.red * (1.0F - a),
+            fg.green * a + bg.green * (1.0F - a),
+            fg.blue * a + bg.blue * (1.0F - a),
+            1.0F,
+        };
+    };
+
+    const auto presets = BrandPresets();
+    for (const bool dark : {false, true}) {
+        for (std::size_t idx = 0; idx < presets.size(); ++idx) {
+            const ThemeSpec theme = AppThemeSpec(dark, presets[idx]);
+            const StatusPalette sp = ResolveStatusPalette(theme);
+            const std::string scope = std::string("ThemeToken[") + (dark ? "Dark" : "Light") +
+                                      ",preset=" + std::to_string(idx) + "]";
+
+            if (!(theme.colors.error == sp.danger)) {
+                ctx.Flag(scope, "theme.colors.error does not match sp.danger");
+            }
+            if (!(sp.sidebar_bg == theme.colors.surface_container_low)) {
+                ctx.Flag(scope, "sp.sidebar_bg does not match surface_container_low");
+            }
+            if (!(sp.card_bg == theme.colors.surface_container)) {
+                ctx.Flag(scope, "sp.card_bg does not match surface_container");
+            }
+            if (theme.interactions.disabled_opacity < 0.48F) {
+                ctx.Flag(scope, "disabled_opacity below 0.48F: " + std::to_string(theme.interactions.disabled_opacity));
+            }
+
+            const Color disabled_ghost = blend_over(
+                sp.ghost_disabled_fg, theme.interactions.disabled_opacity, theme.colors.surface);
+            const float disabled_contrast = contrast_ratio(disabled_ghost, theme.colors.surface);
+            const float enabled_contrast = contrast_ratio(theme.colors.on_surface_variant, theme.colors.surface);
+            if (disabled_contrast < 2.8F) {
+                ctx.Flag(scope, "Disabled ghost button contrast too low: " + std::to_string(disabled_contrast));
+            }
+            if (disabled_contrast >= enabled_contrast) {
+                ctx.Flag(scope, "Disabled ghost contrast (" + std::to_string(disabled_contrast) +
+                                    ") not visually distinct from enabled (" + std::to_string(enabled_contrast) + ")");
+            }
+
+            const float danger_contrast = contrast_ratio(sp.on_danger_fill, sp.danger_fill);
+            if (danger_contrast < 4.5F) {
+                ctx.Flag(scope, "Danger fill contrast below 4.5:1: " + std::to_string(danger_contrast));
+            }
+        }
+    }
+
+    const auto saved_lines = store->console_lines.Get();
+    ui.SetWindowMetrics({.viewport = {1180.0F, 760.0F}});
+    store->active_nav = 2;
+    store->console_lines = std::vector<std::string>{};
+    store->SetThemeMode(ThemeMode::Light);
+    ui.Pump();
+
+    const auto copy_q = ui.FindSemantics(UiSemanticSelector::AllOf(
+        UiSemanticSelector::Role(SemanticRole::Button),
+        UiSemanticSelector::Label("复制")
+    ));
+    const auto clear_q = ui.FindSemantics(UiSemanticSelector::AllOf(
+        UiSemanticSelector::Role(SemanticRole::Button),
+        UiSemanticSelector::Label("清空")
+    ));
+    if (!copy_q.Exists() || copy_q.One().enabled) {
+        ctx.Flag("TaskConsoleEmpty(Light)", "Expected disabled '复制' button when console_lines is empty");
+    }
+    if (!clear_q.Exists() || clear_q.One().enabled) {
+        ctx.Flag("TaskConsoleEmpty(Light)", "Expected disabled '清空' button when console_lines is empty");
+    }
+    AuditCurrentScreen(ctx, ui, 1180.0F, 760.0F, "TaskConsoleEmpty(Light)", "page-store", true);
+
+    store->console_lines = std::vector<std::string>{"sample log line"};
+    ui.Pump();
+    if (!copy_q.Exists() || !copy_q.One().enabled) {
+        ctx.Flag("TaskConsoleNonEmpty(Light)", "Expected enabled '复制' button when console_lines is non-empty");
+    }
+    if (!clear_q.Exists() || !clear_q.One().enabled) {
+        ctx.Flag("TaskConsoleNonEmpty(Light)", "Expected enabled '清空' button when console_lines is non-empty");
+    }
+
+    store->console_lines = saved_lines;
+    store->SetThemeMode(ThemeMode::Auto);
     ui.Pump();
 }
 
@@ -1582,6 +1833,8 @@ int main(int argc, char** argv) {
     TestMacOsTitleBarMetrics(ctx, ui, store);
     TestStorePaginationAndErrorStates(ctx, ui, store);
     TestDuplicateDataNoDuplicateKeys(ctx, ui, store);
+    TestSearchBoxes(ctx, ui, store);
+    TestThemeAndDisabledControls(ctx, ui, store);
 
     if (ctx.anomalies.empty()) {
         std::cout << "UI layout test passed with 0 anomalies.\n";

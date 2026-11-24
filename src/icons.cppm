@@ -194,6 +194,19 @@ VectorAsset SearchIcon() {
     });
 }
 
+VectorAsset CloseIcon(float w = 2.2F) {
+    return VectorAsset::Create({24.0F, 24.0F}, [w](VectorBuilder& b) {
+        const auto c = Color::White();
+        const auto st = detail::RoundStroke(w);
+        Path d1;
+        d1.MoveTo({6.0F, 6.0F}).LineTo({18.0F, 18.0F});
+        b.StrokePath(d1, c, st);
+        Path d2;
+        d2.MoveTo({18.0F, 6.0F}).LineTo({6.0F, 18.0F});
+        b.StrokePath(d2, c, st);
+    });
+}
+
 VectorAsset PlusIcon() {
     return VectorAsset::Create({24.0F, 24.0F}, [](VectorBuilder& b) {
         const auto w = Color::White();

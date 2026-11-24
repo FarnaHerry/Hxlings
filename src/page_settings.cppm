@@ -1119,9 +1119,6 @@ View SettingsPage() {
 
     const auto make_theme_icon = [&](ThemeMode target_mode, ImageVariant icon, std::string tooltip, std::string key) {
         const bool active = app_cfg.theme_mode == target_mode;
-        const bool dark = theme.brightness == ThemeBrightness::Dark;
-        const Color hover = dark ? Color::Rgb(255, 255, 255, 0.08F) : Color::Rgb(15, 23, 42, 0.06F);
-        const Color press = dark ? Color::Rgb(255, 255, 255, 0.14F) : Color::Rgb(15, 23, 42, 0.11F);
         const Color fg = active ? theme.colors.primary : theme.colors.on_surface_variant;
         return Row {
             Image(std::move(icon))
@@ -1135,8 +1132,8 @@ View SettingsPage() {
             Border{active ? WithAlpha(theme.colors.primary, 0.35F) : Color::Transparent(), 1.0F},
             CornerRadius(8.0F),
             Indication{
-                .hover = IndicationLayer{.fill = hover},
-                .press = IndicationLayer{.fill = press},
+                .hover = IndicationLayer{.fill = sp.hover_subtle},
+                .press = IndicationLayer{.fill = sp.press_subtle},
             },
             Tooltip(tooltip),
             Focusable(true),

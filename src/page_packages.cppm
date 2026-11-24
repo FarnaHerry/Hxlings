@@ -662,13 +662,11 @@ View PackagesPage() {
 
     View toolbar = Column {
         Row {
-            TextField(filter_input)
-                .Placeholder("筛选已安装包...")
-                .Variant(TextFieldVariant::Outlined)
-                .LeadingIcon(icons::SearchIcon())
-                .OnChanged([filter_input](const TextEditingValue& next) mutable { filter_input = next; })
-                .With(Grow(1.0F), filter_handle)
-                .Key("packages-filter-input"),
+            SearchBox(filter_input, {
+                .placeholder = "筛选已安装包...",
+                .focus_handle = filter_handle,
+                .input_key = "packages-filter-input",
+            }).With(Grow(1.0F)),
             ActionButton(
                 "批量更新",
                 ButtonTone::Primary,

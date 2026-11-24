@@ -141,11 +141,9 @@ View NavItemButton(
     View trailing = {}
 ) {
     const ThemeSpec& theme = UseTheme();
-    const bool dark = theme.brightness == ThemeBrightness::Dark;
+    const StatusPalette sp = ResolveStatusPalette(theme);
     const Color fg = active ? theme.colors.primary : theme.colors.on_surface_variant;
     const Color bg = active ? theme.colors.primary_container : Color::Transparent();
-    const Color hover = dark ? Color::Rgb(255, 255, 255, 0.06F) : Color::Rgb(15, 23, 42, 0.05F);
-    const Color press = dark ? Color::Rgb(255, 255, 255, 0.12F) : Color::Rgb(15, 23, 42, 0.10F);
 
     return Row {
         Image(std::move(icon))
@@ -166,8 +164,8 @@ View NavItemButton(
         Background(bg),
         CornerRadius(9.0F),
         Indication{
-            .hover = IndicationLayer{.fill = hover},
-            .press = IndicationLayer{.fill = press},
+            .hover = IndicationLayer{.fill = sp.hover_subtle},
+            .press = IndicationLayer{.fill = sp.press_subtle},
         },
         Focusable(true),
         PointerCursor(PointerCursorKind::Hand),
@@ -185,7 +183,8 @@ View TitleIconAction(
     std::string semantic_label = "Action"
 ) {
     const ThemeSpec& theme = UseTheme();
-    const Color tint = enabled ? theme.colors.on_surface_variant : WithAlpha(theme.colors.on_surface_variant, 0.4F);
+    const StatusPalette sp = ResolveStatusPalette(theme);
+    const Color tint = enabled ? theme.colors.on_surface_variant : sp.ghost_disabled_fg;
     return Row {
         Image(std::move(icon))
             .Fit(ImageFit::Contain)
@@ -195,6 +194,10 @@ View TitleIconAction(
     }.With(
         Padding(6.0F),
         CornerRadius(8.0F),
+        Indication{
+            .hover = IndicationLayer{.fill = sp.hover_subtle},
+            .press = IndicationLayer{.fill = sp.press_subtle},
+        },
         Tooltip(std::move(tooltip)),
         Focusable(enabled),
         Enabled(enabled),

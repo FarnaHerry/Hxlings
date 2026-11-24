@@ -1314,12 +1314,11 @@ View SubosPage() {
 
                 tab_content = Column {
                     Row {
-                        TextField(shim_filter)
-                            .Placeholder("过滤 Shims 命令名...")
-                            .Variant(TextFieldVariant::Outlined)
-                            .LeadingIcon(icons::SearchIcon())
-                            .OnChanged([shim_filter](const TextEditingValue& v) mutable { shim_filter = v; })
-                            .With(Grow(1.0F), shim_filter_handle),
+                        SearchBox(shim_filter, {
+                            .placeholder = "过滤 Shims 命令名...",
+                            .focus_handle = shim_filter_handle,
+                            .input_key = "subos-shim-filter-input",
+                        }).With(Grow(1.0F)),
                         StatusBadge("共 " + std::to_string(shims.size()) + " 个", sp.info, sp.info_bg),
                     }.With(Spacing(10.0F), CrossAlign(CrossAxisAlignment::Center)),
                     Text("点击任意命令可复制到剪贴板", TextRole::Label)

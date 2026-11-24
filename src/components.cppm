@@ -11,6 +11,120 @@ import hxlings.store;
 
 using namespace huxerui;
 
+namespace hxlings::detail {
+
+TextFieldStyle BuildSearchTextFieldStyle(const ThemeSpec& theme) {
+    const auto scale_alpha = [](Color c, float factor) {
+        c.alpha *= factor;
+        return c;
+    };
+    const Color placeholder = scale_alpha(theme.colors.on_surface, 0.55F);
+    const Color border = scale_alpha(theme.colors.on_surface, 0.4F);
+    const Color hovered_border = scale_alpha(theme.colors.on_surface, 0.7F);
+    const Color disabled_content = scale_alpha(theme.colors.on_surface, theme.interactions.disabled_opacity);
+    const Color disabled_border = scale_alpha(border, theme.interactions.disabled_opacity);
+
+    return TextFieldStyle{
+        .variant = TextFieldVariant::Outlined,
+        .show_label = true,
+        .standard =
+            {
+                .background = Color::Transparent(),
+                .border = border,
+                .hovered_border = hovered_border,
+                .focused_border = theme.colors.primary,
+                .disabled_border = disabled_border,
+                .corner_radii = {},
+                .minimum_height = 40.0F,
+            },
+        .filled =
+            {
+                .background = theme.colors.surface_container_highest,
+                .border = border,
+                .hovered_border = hovered_border,
+                .focused_border = theme.colors.primary,
+                .disabled_border = disabled_border,
+                .corner_radii = CornerRadii::Top(theme.shapes.extra_small + 2.0F),
+                .minimum_height = 44.0F,
+            },
+        .outlined =
+            {
+                .background = Color::Transparent(),
+                .border = border,
+                .hovered_border = hovered_border,
+                .focused_border = theme.colors.primary,
+                .disabled_border = disabled_border,
+                .corner_radii = CornerRadii{theme.shapes.extra_small + 2.0F},
+                .minimum_height = 36.0F,
+            },
+        .text_style =
+            TextStyle{Font::FromFamily(theme.typography.family, theme.typography.body_medium), theme.colors.on_surface},
+        .label_style =
+            TextStyle{Font::FromFamily(theme.typography.family, theme.typography.body_medium), placeholder},
+        .floating_label_style =
+            TextStyle{Font::FromFamily(theme.typography.family, theme.typography.body_small), placeholder},
+        .placeholder_style =
+            TextStyle{Font::FromFamily(theme.typography.family, theme.typography.body_medium), placeholder},
+        .disabled_text = disabled_content,
+        .focused_label = theme.colors.primary,
+        .disabled_label = disabled_content,
+        .error_label = theme.colors.error,
+        .disabled_placeholder = disabled_content,
+        .disabled_supporting_text = disabled_content,
+        .leading_icon = placeholder,
+        .focused_leading_icon = theme.colors.primary,
+        .disabled_leading_icon = disabled_content,
+        .error_leading_icon = theme.colors.error,
+        .trailing_icon = theme.colors.on_surface_variant,
+        .focused_trailing_icon = theme.colors.on_surface_variant,
+        .disabled_trailing_icon = disabled_content,
+        .error_trailing_icon = theme.colors.error,
+        .selection =
+            Color{
+                theme.colors.primary.red,
+                theme.colors.primary.green,
+                theme.colors.primary.blue,
+                0.22F,
+            },
+        .caret = theme.colors.primary,
+        .error_caret = theme.colors.error,
+        .composition = theme.colors.primary,
+        .caret_width = 2.0F,
+        .border_width = 1.0F,
+        .focused_border_width = 2.0F,
+        .padding = EdgeInsets::Symmetric(10.0F, theme.spacing.small),
+        .leading_icon_size = 18.0F,
+        .trailing_icon_size = 14.0F,
+        .icon_spacing = theme.spacing.small,
+        .label_spacing = theme.spacing.extra_small,
+        .label_cutout_padding = theme.spacing.extra_small,
+        .label_animation_duration = theme.motion.reduced_motion ? 0.0 : theme.motion.fast,
+        .caret_blink_interval = theme.motion.reduced_motion ? 0.0 : 0.5,
+        .validation_error = theme.colors.error,
+        .validation_border_width = 1.0F,
+        .focused_validation_border_width = 2.0F,
+        .validation_text_style =
+            TextStyle{Font::FromFamily(theme.typography.family, theme.typography.body_small), theme.colors.error},
+        .validation_spacing = theme.spacing.extra_small,
+    };
+}
+
+IconButtonStyle BuildSearchClearActionStyle(const ThemeSpec& theme) {
+    Color disabled_fg = theme.colors.on_surface;
+    disabled_fg.alpha *= theme.interactions.disabled_opacity;
+    return IconButtonStyle{
+        .foreground = theme.colors.on_surface_variant,
+        .disabled_foreground = disabled_fg,
+        .icon_size = 14.0F,
+        .minimum_interactive_size = 26.0F,
+        .state_layer_size = 24.0F,
+        .corner_radius = theme.shapes.full,
+        .indication = std::nullopt,
+    };
+}
+
+} // namespace hxlings::detail
+
 export namespace hxlings {
 
 enum class ButtonTone {
@@ -36,10 +150,8 @@ View ActionButton(
     Color fg = theme.colors.on_primary;
     Color border_col = Color::Transparent();
     float border_w = 0.0F;
-    Color hover_overlay = Color::Rgb(255, 255, 255, 0.14F);
-    Color press_overlay = Color::Rgb(255, 255, 255, 0.24F);
-
-    const bool dark = theme.brightness == ThemeBrightness::Dark;
+    Color hover_overlay = sp.hover_on_accent;
+    Color press_overlay = sp.press_on_accent;
 
     switch (tone) {
         case ButtonTone::Primary:
@@ -49,23 +161,20 @@ View ActionButton(
             fg = theme.colors.on_surface;
             border_col = sp.border_soft;
             border_w = 1.0F;
-            hover_overlay = dark ? Color::Rgb(255, 255, 255, 0.08F) : Color::Rgb(15, 23, 42, 0.06F);
-            press_overlay = dark ? Color::Rgb(255, 255, 255, 0.14F) : Color::Rgb(15, 23, 42, 0.12F);
+            hover_overlay = sp.hover_subtle;
+            press_overlay = sp.press_subtle;
             break;
         case ButtonTone::Danger:
-            bg = sp.danger;
-            fg = Color::White();
+            bg = sp.danger_fill;
+            fg = sp.on_danger_fill;
             break;
         case ButtonTone::Ghost:
             bg = Color::Transparent();
-            fg = theme.colors.on_surface_variant;
-            hover_overlay = dark ? Color::Rgb(255, 255, 255, 0.08F) : Color::Rgb(15, 23, 42, 0.06F);
-            press_overlay = dark ? Color::Rgb(255, 255, 255, 0.14F) : Color::Rgb(15, 23, 42, 0.12F);
+            fg = enabled ? theme.colors.on_surface_variant : sp.ghost_disabled_fg;
+            hover_overlay = sp.hover_subtle;
+            press_overlay = sp.press_subtle;
             break;
     }
-
-    const Color effective_fg = enabled ? fg : WithAlpha(fg, 0.45F);
-    const Color effective_bg = enabled ? bg : WithAlpha(bg, 0.45F);
 
     std::vector<View> items;
     if (icon.has_value()) {
@@ -74,7 +183,7 @@ View ActionButton(
             Image(*icon)
                 .Fit(ImageFit::Contain)
                 .Align(HorizontalAlignment::Center, VerticalAlignment::Center)
-                .Tint(effective_fg)
+                .Tint(fg)
                 .With(Frame{.width = sz, .height = sz})
         );
     }
@@ -83,7 +192,7 @@ View ActionButton(
             Text(label, TextRole::Label)
                 .Style(TextStyle{
                     .font = Font::System(compact ? 12.5F : 13.5F).WithWeight(FontWeight::Medium),
-                    .foreground = effective_fg,
+                    .foreground = fg,
                 })
         );
     }
@@ -102,7 +211,7 @@ View ActionButton(
             Padding(pad),
             Spacing(6.0F),
             CrossAlign(CrossAxisAlignment::Center),
-            Background(effective_bg),
+            Background(bg),
             Border{border_col, border_w},
             CornerRadius(8.0F),
             std::move(ind),
@@ -112,6 +221,57 @@ View ActionButton(
             Semantics{.role = SemanticRole::Button, .label = label.empty() ? std::string("Action") : label}
         )
         .OnClick(std::move(on_click));
+}
+
+struct SearchBoxOptions {
+    std::string placeholder{};
+    std::optional<ViewHandle> focus_handle{};
+    std::string input_key{};
+    std::string clear_label = "清空搜索";
+    std::function<void()> on_submitted{};
+    std::function<void()> on_clear{};
+};
+
+[[huxerui::composable]]
+View SearchBox(State<TextEditingValue> value, SearchBoxOptions options = {}) {
+    const ThemeSpec& theme = UseTheme();
+    ThemeDefinition overrides;
+    overrides.Set(detail::BuildSearchTextFieldStyle(theme));
+    overrides.Set(detail::BuildSearchClearActionStyle(theme));
+
+    TextField field = TextField(value)
+        .Placeholder(options.placeholder)
+        .Variant(TextFieldVariant::Outlined)
+        .LeadingIcon(icons::SearchIcon())
+        .OnChanged([value](const TextEditingValue& next) mutable { value = next; });
+
+    if (options.on_submitted) {
+        field = std::move(field).OnSubmitted(options.on_submitted);
+    }
+
+    if (!value.Get().text.empty()) {
+        const bool blank_label = std::ranges::all_of(options.clear_label, [](unsigned char ch) {
+            return std::isspace(ch) != 0;
+        });
+        const std::string clear_label = blank_label ? std::string("清空搜索") : options.clear_label;
+        field = std::move(field)
+            .TrailingIcon(icons::CloseIcon(), clear_label)
+            .OnTrailingIconClick([value, on_clear = options.on_clear]() mutable {
+                value = TextEditingValue::FromText("");
+                if (on_clear) {
+                    on_clear();
+                }
+            });
+    }
+
+    if (options.focus_handle.has_value()) {
+        field = std::move(field).With(*options.focus_handle);
+    }
+    if (!options.input_key.empty()) {
+        field = std::move(field).Key(options.input_key);
+    }
+
+    return Theme(std::move(overrides), std::move(field));
 }
 
 [[huxerui::composable]]
@@ -245,6 +405,7 @@ View ExternalLinkRow(
     const ApplicationHandle app = UseApplication();
     const auto clipboard = app.Clipboard();
     const ThemeSpec& theme = UseTheme();
+    const StatusPalette sp = ResolveStatusPalette(theme);
 
     const std::string normalized = NormalizeBrowserUrl(url);
     const std::string target = normalized.empty() ? std::move(url) : normalized;
@@ -253,7 +414,7 @@ View ExternalLinkRow(
     View link_btn = Row {
         Image(icons::ExternalLinkIcon())
             .Fit(ImageFit::Contain)
-            .Tint(valid ? theme.colors.primary : theme.colors.on_surface_variant)
+            .Tint(valid ? theme.colors.primary : sp.ghost_disabled_fg)
             .With(Frame{.width = 14.0F, .height = 14.0F}),
         Text(target.empty() ? std::string("—") : target, TextRole::Body)
             .Style(TextStyle{
@@ -268,8 +429,8 @@ View ExternalLinkRow(
         Padding(EdgeInsets::Symmetric(6.0F, 3.0F)),
         CornerRadius(6.0F),
         Indication{
-            .hover = IndicationLayer{.fill = WithAlpha(theme.colors.primary, 0.10F)},
-            .press = IndicationLayer{.fill = WithAlpha(theme.colors.primary, 0.18F)},
+            .hover = IndicationLayer{.fill = sp.hover_primary},
+            .press = IndicationLayer{.fill = sp.press_primary},
         },
         Focusable(valid),
         Enabled(valid),
@@ -339,11 +500,12 @@ View KeyValueRow(
 [[huxerui::composable]]
 View EmptyState(VectorAsset icon, std::string title, std::string subtitle = {}) {
     const ThemeSpec& theme = UseTheme();
+    const StatusPalette sp = ResolveStatusPalette(theme);
     std::vector<View> items;
     items.push_back(
         Image(std::move(icon))
             .Fit(ImageFit::Contain)
-            .Tint(WithAlpha(theme.colors.on_surface_variant, 0.55F))
+            .Tint(sp.icon_muted)
             .With(Frame{.width = 40.0F, .height = 40.0F})
     );
     items.push_back(
@@ -460,7 +622,7 @@ View DialogCardShell(std::string title, View body, View actions, float width = 4
         Background(theme.colors.surface),
         Border{sp.border_soft, 1.0F},
         CornerRadius(14.0F),
-        Shadow{Color::Rgb(0, 0, 0, 0.28F), {}, 24.0F, 0.0F},
+        Shadow{sp.shadow_elevated, {}, 24.0F, 0.0F},
         CrossAlign(CrossAxisAlignment::Stretch)
     );
 }
