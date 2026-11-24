@@ -488,6 +488,69 @@ void TestBundledResourcesAndChildEnvSanitization() {
         Check(g4 == std::optional<std::string>("/usr/local/lib"),
               "SanitizeColonPathList strips .mcpp/registry paths");
     }
+    {
+        const auto desktop_path = BuildSanitizedSearchPath(
+            {"/usr/local/bin", "/usr/bin", "/bin"},
+            {"/home/demo/.xlings/subos/current/bin", "/home/demo/.xlings/bin"},
+            {"/usr/local/bin", "/usr/bin", "/bin"},
+            ""
+        );
+        Check(desktop_path.size() == 5 &&
+                  desktop_path[0] == std::filesystem::path("/home/demo/.xlings/subos/current/bin") &&
+                  desktop_path[1] == std::filesystem::path("/home/demo/.xlings/bin") &&
+                  desktop_path[2] == std::filesystem::path("/usr/local/bin") &&
+                  desktop_path[3] == std::filesystem::path("/usr/bin") &&
+                  desktop_path[4] == std::filesystem::path("/bin"),
+              "BuildSanitizedSearchPath prepends priority xlings dirs and deduplicates fallback host dirs");
+
+        const auto cleaned_path = BuildSanitizedSearchPath(
+            {"/home/demo/.mcpp/registry/bin", "/opt/hxlings/bin", "/opt/hxlings-custom/bin", "/usr/bin"},
+            {"/home/demo/.xlings/subos/current/bin"},
+            {"/usr/bin", "/usr/local/bin"},
+            "/opt/hxlings"
+        );
+        Check(cleaned_path.size() == 4 &&
+                  cleaned_path[0] == std::filesystem::path("/home/demo/.xlings/subos/current/bin") &&
+                  cleaned_path[1] == std::filesystem::path("/opt/hxlings-custom/bin") &&
+                  cleaned_path[2] == std::filesystem::path("/usr/bin") &&
+                  cleaned_path[3] == std::filesystem::path("/usr/local/bin"),
+              "BuildSanitizedSearchPath strips registry and bundle dirs while preserving sibling custom paths");
+    }
+    if constexpr (mcpplibs::os::is_posix) {
+        std::error_code ec;
+        std::filesystem::path temp_base = mcpplibs::os::dirs::temp();
+        if (temp_base.empty()) {
+            temp_base = std::filesystem::temp_directory_path(ec);
+        }
+        const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+        const auto tmp_dir = temp_base / ("hxlings-path-spawn-test-" + std::to_string(stamp));
+        std::filesystem::remove_all(tmp_dir, ec);
+        std::filesystem::create_directories(tmp_dir, ec);
+
+        const auto subcmd = tmp_dir / "stub-subcmd";
+        const auto driver = tmp_dir / "stub-driver";
+        {
+            std::ofstream out(subcmd, std::ios::binary);
+            out << "#!/bin/sh\necho sibling-found-ok\n";
+        }
+        {
+            std::ofstream out(driver, std::ios::binary);
+            out << "#!/bin/sh\nstub-subcmd\n";
+        }
+        constexpr auto exec_perms = std::filesystem::perms::owner_all |
+                                    std::filesystem::perms::group_read | std::filesystem::perms::group_exec |
+                                    std::filesystem::perms::others_read | std::filesystem::perms::others_exec;
+        std::filesystem::permissions(subcmd, exec_perms, std::filesystem::perm_options::replace, ec);
+        std::filesystem::permissions(driver, exec_perms, std::filesystem::perm_options::replace, ec);
+
+        const ProcessResult res = RunProcessStreaming({mcpplibs::os::fs::utf8(driver)});
+        Check(res.exit_code == 0,
+              "POSIX RunProcessStreaming prepends executable dir so sibling bare-command lookup avoids exit 127");
+        Check(res.raw_output.find("sibling-found-ok") != std::string::npos,
+              "POSIX RunProcessStreaming captures output from sibling bare-command invocation");
+
+        std::filesystem::remove_all(tmp_dir, ec);
+    }
 }
 
 void TestWindowsProcessHelpersAndSpawn() {

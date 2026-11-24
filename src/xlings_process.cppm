@@ -28,11 +28,42 @@ bool IsExecutableFile(const std::filesystem::path& path) {
     return true;
 }
 
-bool ContainsPathEntry(const std::vector<std::filesystem::path>& dirs, const std::filesystem::path& target) {
-    for (const auto& d : dirs) {
-        if (os::fs::same(d, target)) return true;
+std::string NormalizePathKey(const std::filesystem::path& path) {
+    if (path.empty()) return {};
+    std::string key = os::fs::utf8(path.lexically_normal());
+    if constexpr (os::is_windows) {
+        for (char& ch : key) {
+            if (ch == '/') {
+                ch = '\\';
+            } else if (ch >= 'A' && ch <= 'Z') {
+                ch = static_cast<char>(ch - 'A' + 'a');
+            }
+        }
+        while (key.size() > 3 && (key.back() == '\\' || key.back() == '/')) {
+            key.pop_back();
+        }
+        if (key.size() > 1 && key[0] == '\\' && key.back() == '\\') {
+            key.pop_back();
+        }
+    } else {
+        while (key.size() > 1 && key.back() == '/') {
+            key.pop_back();
+        }
     }
-    return false;
+    return key;
+}
+
+std::filesystem::path ExtractExecutableParentDir(std::string_view program) {
+    if (program.empty()) return {};
+    const std::filesystem::path exe = os::fs::from_utf8(program);
+    const std::filesystem::path parent = exe.parent_path();
+    if (parent.empty()) return {};
+    std::error_code ec;
+    if (!std::filesystem::is_directory(parent, ec)) {
+        return {};
+    }
+    const std::filesystem::path abs_parent = std::filesystem::absolute(parent, ec);
+    return ec ? parent : abs_parent;
 }
 
 template <class Fn>
@@ -75,6 +106,35 @@ inline std::optional<std::string> SanitizeColonPathList(std::string_view list, s
     });
     if (out.empty()) return std::nullopt;
     return out;
+}
+
+inline std::vector<std::filesystem::path> BuildSanitizedSearchPath(
+    const std::vector<std::filesystem::path>& current_dirs,
+    const std::vector<std::filesystem::path>& priority_dirs,
+    const std::vector<std::filesystem::path>& fallback_dirs,
+    std::string_view bundle_dir
+) {
+    namespace os = mcpplibs::os;
+    std::vector<std::filesystem::path> result;
+    std::vector<std::string> seen;
+
+    auto try_append = [&](const std::filesystem::path& dir) {
+        if (dir.empty()) return;
+        const std::string utf8_dir = os::fs::utf8(dir);
+        if (utf8_dir.empty() || PathMatchesPrefixOrRegistry(utf8_dir, bundle_dir)) return;
+        const std::string key = detail::NormalizePathKey(dir);
+        if (key.empty()) return;
+        for (const auto& existing : seen) {
+            if (existing == key) return;
+        }
+        seen.push_back(key);
+        result.push_back(dir);
+    };
+
+    for (const auto& dir : priority_dirs) try_append(dir);
+    for (const auto& dir : current_dirs) try_append(dir);
+    for (const auto& dir : fallback_dirs) try_append(dir);
+    return result;
 }
 
 inline std::string QuoteWindowsArg(std::string_view arg) {
@@ -197,7 +257,9 @@ inline std::vector<std::string> MergeWindowsEnvEntries(
 
 namespace hxlings::detail {
 
-std::vector<std::pair<std::string, std::optional<std::string>>> BuildSanitizedEnvOverrides() {
+std::vector<std::pair<std::string, std::optional<std::string>>> BuildSanitizedEnvOverrides(
+    const std::filesystem::path& program_dir = {}
+) {
     std::vector<std::pair<std::string, std::optional<std::string>>> overrides;
     for (const char* var_name : {"XLINGS_HOME", "XLINGS_DATA", "XLINGS_SUBOS"}) {
         if (const auto val = os::env::get(var_name); val && ContainsMcppRegistry(*val)) {
@@ -228,42 +290,54 @@ std::vector<std::pair<std::string, std::optional<std::string>>> BuildSanitizedEn
         }
     }
 
+    const std::vector<std::filesystem::path> current_dirs = os::env::search_path();
+    std::vector<std::filesystem::path> priority_dirs;
+    std::vector<std::filesystem::path> fallback_dirs;
+
+    auto append_existing_dir = [](std::vector<std::filesystem::path>& out, const std::filesystem::path& dir) {
+        if (dir.empty()) return;
+        std::error_code ec;
+        if (std::filesystem::is_directory(dir, ec)) {
+            out.push_back(dir);
+        }
+    };
+
+    append_existing_dir(priority_dirs, program_dir);
+    if (const auto xlings_home = os::env::get("XLINGS_HOME");
+        xlings_home.has_value() && !xlings_home->empty() && !ContainsMcppRegistry(*xlings_home)) {
+        const std::filesystem::path xh = os::fs::from_utf8(*xlings_home);
+        append_existing_dir(priority_dirs, xh / "subos" / "current" / "bin");
+        append_existing_dir(priority_dirs, xh / "bin");
+    }
+    if (const auto home = os::dirs::home(); home.has_value() && !home->empty()) {
+        append_existing_dir(priority_dirs, *home / ".xlings" / "subos" / "current" / "bin");
+        append_existing_dir(priority_dirs, *home / ".xlings" / "bin");
+    }
+
     if constexpr (os::is_macos) {
-        const std::vector<std::filesystem::path> current_dirs = os::env::search_path();
-        std::vector<std::filesystem::path> next_dirs;
-        bool changed = false;
-
-        auto append_if_valid_and_missing = [&](const std::filesystem::path& dir) {
-            std::error_code ec;
-            if (!dir.empty() && std::filesystem::is_directory(dir, ec) && !ContainsPathEntry(next_dirs, dir)) {
-                if (!ContainsPathEntry(current_dirs, dir)) changed = true;
-                next_dirs.push_back(dir);
-            }
-        };
-
-        if (const auto home = os::dirs::home(); home.has_value() && !home->empty()) {
-            append_if_valid_and_missing(*home / ".xlings" / "subos" / "current" / "bin");
-            append_if_valid_and_missing(*home / ".xlings" / "bin");
+        for (const char* sys_bin : {"/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin", "/usr/bin", "/bin"}) {
+            append_existing_dir(fallback_dirs, std::filesystem::path(sys_bin));
         }
+    } else if constexpr (os::is_linux) {
+        for (const char* sys_bin : {"/usr/local/bin", "/usr/bin", "/bin"}) {
+            append_existing_dir(fallback_dirs, std::filesystem::path(sys_bin));
+        }
+    }
 
-        for (const auto& dir : current_dirs) {
-            if (dir.empty()) continue;
-            if (ContainsMcppRegistry(os::fs::utf8(dir))) {
-                changed = true;
-                continue;
-            }
-            if (!ContainsPathEntry(next_dirs, dir)) {
-                next_dirs.push_back(dir);
+    const std::vector<std::filesystem::path> next_dirs =
+        hxlings::BuildSanitizedSearchPath(current_dirs, priority_dirs, fallback_dirs, bundle_dir);
+
+    bool path_changed = next_dirs.size() != current_dirs.size();
+    if (!path_changed) {
+        for (std::size_t i = 0; i < next_dirs.size(); ++i) {
+            if (NormalizePathKey(next_dirs[i]) != NormalizePathKey(current_dirs[i])) {
+                path_changed = true;
+                break;
             }
         }
-
-        for (const char* sys_bin : {"/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin"}) {
-            append_if_valid_and_missing(std::filesystem::path(sys_bin));
-        }
-
-        if (changed && !next_dirs.empty()) {
-            overrides.emplace_back("PATH", os::env::join_list(next_dirs));
-        }
+    }
+    if (path_changed && !next_dirs.empty()) {
+        overrides.emplace_back("PATH", os::env::join_list(next_dirs));
     }
 
     return overrides;
@@ -292,6 +366,7 @@ struct ProcessResult {
 std::string ResolveXlingsBinary() {
     namespace os = mcpplibs::os;
     const std::string bin_name = std::string("xlings") + std::string(os::conventions().exe_suffix);
+    const std::string bundle_dir = os::env::get("MCPP_BUNDLE_DIR").value_or(std::string{});
 
     if (const auto override_bin = os::env::get("HXLINGS_BIN"); override_bin && !override_bin->empty()) {
         const auto p = os::fs::from_utf8(*override_bin);
@@ -301,10 +376,23 @@ std::string ResolveXlingsBinary() {
     }
 
     for (const auto& dir : os::env::search_path()) {
-        if (dir.empty() || detail::ContainsMcppRegistry(os::fs::utf8(dir))) continue;
+        if (dir.empty() || PathMatchesPrefixOrRegistry(os::fs::utf8(dir), bundle_dir)) continue;
         const std::filesystem::path candidate = dir / bin_name;
         if (detail::IsExecutableFile(candidate)) {
             return os::fs::native(candidate);
+        }
+    }
+
+    if (const auto xlings_home = os::env::get("XLINGS_HOME");
+        xlings_home.has_value() && !xlings_home->empty() && !detail::ContainsMcppRegistry(*xlings_home)) {
+        const std::filesystem::path xh = os::fs::from_utf8(*xlings_home);
+        const std::filesystem::path current_bin = xh / "subos" / "current" / "bin" / bin_name;
+        if (detail::IsExecutableFile(current_bin)) {
+            return os::fs::native(current_bin);
+        }
+        const std::filesystem::path direct_bin = xh / "bin" / bin_name;
+        if (detail::IsExecutableFile(direct_bin)) {
+            return os::fs::native(direct_bin);
         }
     }
 
@@ -569,7 +657,8 @@ ProcessResult RunWindowsProcessStreamingImpl(
             return result;
         }
 
-        const auto env_overrides = BuildSanitizedEnvOverrides();
+        const std::filesystem::path program_dir = ExtractExecutableParentDir(args[0]);
+        const auto env_overrides = BuildSanitizedEnvOverrides(program_dir);
         std::vector<char16_t> env_block;
         void* env_ptr = nullptr;
         std::uint32_t creation_flags = kCreateNoWindow | kCreateSuspended;
@@ -881,7 +970,8 @@ ProcessResult RunProcessStreaming(
     opts.err = os::process::stdio::output;
     opts.own_unit = true;
     opts.bound_lifetime = true;
-    opts.env = detail::BuildSanitizedEnvOverrides();
+    const std::filesystem::path program_dir = detail::ExtractExecutableParentDir(args[0]);
+    opts.env = detail::BuildSanitizedEnvOverrides(program_dir);
 
     auto spawned = os::process::process::spawn(opts);
     if (!spawned) {

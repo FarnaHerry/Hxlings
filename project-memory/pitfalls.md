@@ -63,3 +63,7 @@
 16. **`xlings interface probe_url` 对 `socket_timeout_ms > 3000` 返回 `exit 2`**
     - **现象**：向 `xlings interface probe_url` 传入 `{"url":..., "socket_timeout_ms":5000}`（或 `<= 0`）会直接以 `probe_url failed (exit 2) with no error detail on the stream` 退出，而不传入该字段或传入 `1..3000` 则正常探测并返回 `network_probe` 事件。
     - **解决**：`BuildProbeUrlArgs` 默认省略 `socket_timeout_ms`（沿用 CLI 内建默认值），显式传正数时限制在 `[100, 3000]`；`XlingsClient::ProbeUrl` 在无 `network_probe` 数据时兜底保留 `outcome.error_message` / `exit_code`。
+
+17. **桌面启动器环境缺少 `~/.xlings` 目录导致 `xlings self update --yes` 退出 `127`**
+    - **现象**：Linux/Windows 从桌面入口或系统应用菜单启动 GUI 时，继承的 `PATH` 通常仅含 `/usr/local/bin:/usr/bin:/bin`；调用 `xlings self update` 内部会通过 `sh` / `PATH` 查找裸命令 `xlings`，触发 `xlings: command not found` 并返回 `exit 127`。
+    - **解决**：`src/xlings_process.cppm` 的 `BuildSanitizedEnvOverrides` 与 `BuildSanitizedSearchPath` 在 Linux/macOS/Windows 全平台把当前执行二进制所在目录及 `$XLINGS_HOME`/`$HOME/.xlings` 的 `subos/current/bin`、`bin` 前置注入子进程 `PATH`（并继续剔除 `.mcpp/registry` 与 `MCPP_BUNDLE_DIR` 前缀）。
