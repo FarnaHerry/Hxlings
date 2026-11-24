@@ -719,7 +719,7 @@ std::shared_ptr<XlingsStore> MakeSeededStore() {
         .edition = "core",
         .carrier = "bwrap",
         .mode = "sandbox",
-        .persist = "rootfs",
+        .persist = "all",
         .enter = "unprivileged",
         .network = "nat",
         .shell = "bash",
@@ -730,7 +730,7 @@ std::shared_ptr<XlingsStore> MakeSeededStore() {
     store->selected_luban_config = LubanEnvConfigDetail{
         .name = "dev-core",
         .mode = "sandbox",
-        .persist = "rootfs",
+        .persist = "all",
         .shell = "bash",
         .policy_extends = "dev",
         .net = "nat",
@@ -739,6 +739,20 @@ std::shared_ptr<XlingsStore> MakeSeededStore() {
     };
     store->selected_luban_history = std::string("generation 1 (active)");
     store->selected_luban_logs = std::string("[2026-11-24] [luban] dev-core ready");
+    store->luban_config_cache = std::map<std::string, LubanEnvConfigDetail>{
+        {"dev-core", *store->selected_luban_config.Get()},
+    };
+    store->saved_luban_stacks = std::vector<SavedLubanStackInfo>{
+        SavedLubanStackInfo{
+            .id = "team-dev",
+            .filename = "team-dev.toml",
+            .format = "toml",
+            .path = "/tmp/team-dev.toml",
+            .display_name = "team-dev",
+            .description = "seeded local stack",
+            .env_count = 2,
+        },
+    };
 
     return store;
 }
@@ -1539,6 +1553,8 @@ void TestDuplicateDataNoDuplicateKeys(AuditContext& ctx, UiTest& ui, const std::
         };
         store->index_versions = {dup_repo, dup_repo};
 
+        const auto saved_luban_envs = store->luban_envs.Get();
+        const auto saved_luban_catalog = store->luban_catalog.Get();
         LubanEnvironment dup_luban{
             .name = "dev-core",
             .kind = "rootfs",
@@ -1586,6 +1602,8 @@ void TestDuplicateDataNoDuplicateKeys(AuditContext& ctx, UiTest& ui, const std::
         store->luban_tab = 1;
         store->active_nav = 4;
         ui.Pump();
+        store->luban_envs = saved_luban_envs;
+        store->luban_catalog = saved_luban_catalog;
         store->luban_tab = 0;
         ui.Pump();
     } catch (const std::exception& ex) {
@@ -2229,6 +2247,113 @@ void TestUnifiedRefreshStates(AuditContext& ctx, UiTest& ui, const std::shared_p
     ui.Pump();
 }
 
+void TestLubanStackStudio(AuditContext& ctx, UiTest& ui, const std::shared_ptr<XlingsStore>& store) {
+    ui.SetWindowMetrics({.viewport = {1180.0F, 760.0F}});
+    store->active_nav = 4;
+    store->luban_tab = 2;
+    ui.Pump();
+
+    auto scroll_to = [&](const std::string& key) {
+        try {
+            (void)ui.Find(UiSelector::Key("luban-stack-scroll")).ScrollUntil(UiSelector::Key(key));
+            ui.Pump();
+        } catch (const UiTestFailure& ex) {
+            ctx.Flag("LubanStackStudio", "ScrollUntil '" + key + "' failed: " + ex.what());
+        }
+    };
+
+    if (!ui.Find(UiSelector::Key("luban-stack-editor")).Exists()) {
+        ctx.Flag("LubanStackStudio", "Missing luban-stack-editor");
+        return;
+    }
+    if (!ui.Find(UiSelector::Key("luban-stack-valid-badge")).Exists()) {
+        ctx.Flag("LubanStackStudio", "Expected initial preset draft to validate");
+    }
+    AuditCurrentScreen(ctx, ui, 1180.0F, 760.0F, "LubanStackStudio[Default]", "page-luban");
+
+    if (SafeTap(ctx, "LubanStackStudio[Preset1]", ui.Find(UiSelector::Key("luban-stack-preset-1")), "luban-stack-preset-1")) {
+        ui.Pump();
+        if (!ui.Find(UiSelector::Key("luban-stack-valid-badge")).Exists()) {
+            ctx.Flag("LubanStackStudio[Preset1]", "Preset 1 did not produce valid state");
+        }
+        scroll_to("luban-stack-apply-btn");
+        if (!ui.Find(UiSelector::Key("luban-plan-act-dev-core-0")).Exists() ||
+            !ui.Find(UiSelector::Key("luban-plan-act-agent-box-1")).Exists()) {
+            ctx.Flag("LubanStackStudio[Preset1]", "Plan diff missing expected dev-core / agent-box actions");
+        }
+        if (ui.Find(UiSelector::Key("luban-stack-apply-btn")).Find(UiSelector::Enabled(false)).Exists()) {
+            ctx.Flag("LubanStackStudio[Preset1]", "Apply button should be enabled for valid seeded draft");
+        }
+    }
+
+    ui.Find(UiSelector::Key("luban-stack-scroll")).ScrollBy({0.0F, -2000.0F});
+    ui.Pump();
+
+    scroll_to("luban-stack-fmt-json");
+    if (SafeTap(ctx, "LubanStackStudio[JSON]", ui.Find(UiSelector::Key("luban-stack-fmt-json")), "luban-stack-fmt-json")) {
+        ui.Pump();
+        const std::string val = ui.Find(UiSelector::Key("luban-stack-editor")).One().value.value_or("");
+        if (val.empty() || val.front() != '{') {
+            ctx.Flag("LubanStackStudio[JSON]", "Expected JSON conversion in luban-stack-editor");
+        }
+        if (!ui.Find(UiSelector::Key("luban-stack-valid-badge")).Exists()) {
+            ctx.Flag("LubanStackStudio[JSON]", "Converted JSON failed validation");
+        }
+    }
+
+    if (SafeTap(ctx, "LubanStackStudio[TOML]", ui.Find(UiSelector::Key("luban-stack-fmt-toml")), "luban-stack-fmt-toml")) {
+        ui.Pump();
+        const std::string val = ui.Find(UiSelector::Key("luban-stack-editor")).One().value.value_or("");
+        if (val.find("[[environments]]") == std::string::npos) {
+            ctx.Flag("LubanStackStudio[TOML]", "Expected TOML [[environments]] table in luban-stack-editor");
+        }
+        if (!ui.Find(UiSelector::Key("luban-stack-valid-badge")).Exists()) {
+            ctx.Flag("LubanStackStudio[TOML]", "Converted TOML failed validation");
+        }
+    }
+
+    if (SafeTap(ctx, "LubanStackStudio[ExportEnvs]",
+                ui.Find(UiSelector::Key("luban-stack-export-envs-btn")),
+                "luban-stack-export-envs-btn")) {
+        ui.Pump();
+        const std::string val = ui.Find(UiSelector::Key("luban-stack-editor")).One().value.value_or("");
+        if (val.find("dev-core") == std::string::npos || val.find("agent-box") == std::string::npos) {
+            ctx.Flag("LubanStackStudio[ExportEnvs]", "Export from current environments missed dev-core or agent-box");
+        }
+        if (!ui.Find(UiSelector::Key("luban-stack-valid-badge")).Exists()) {
+            ctx.Flag("LubanStackStudio[ExportEnvs]", "Exported stack failed validation");
+        }
+    }
+
+    scroll_to("luban-stack-editor");
+    auto ed_q = ui.Find(UiSelector::Key("luban-stack-editor"));
+    ed_q.Tap();
+    ed_q.EnterText("\nbroken_line_without_equals");
+    ui.Pump();
+    if (!ui.Find(UiSelector::Key("luban-stack-errors")).Exists()) {
+        ctx.Flag("LubanStackStudio[InvalidInput]", "Expected validation error banner on invalid TOML input");
+    }
+    scroll_to("luban-stack-apply-btn");
+    if (!ui.Find(UiSelector::Key("luban-stack-apply-btn")).Find(UiSelector::Enabled(false)).Exists()) {
+        ctx.Flag("LubanStackStudio[InvalidInput]", "Apply button should be disabled when manifest has syntax errors");
+    }
+
+    ui.Find(UiSelector::Key("luban-stack-scroll")).ScrollBy({0.0F, -2000.0F});
+    ui.Pump();
+    if (SafeTap(ctx, "LubanStackStudio[Restore]", ui.Find(UiSelector::Key("luban-stack-preset-0")), "luban-stack-preset-0")) {
+        ui.Pump();
+    }
+
+    ui.SetWindowMetrics({.viewport = {880.0F, 560.0F}});
+    ui.Pump();
+    AuditCurrentScreen(ctx, ui, 880.0F, 560.0F, "LubanStackStudio[880x560]", "page-luban");
+
+    ui.SetWindowMetrics({.viewport = {1180.0F, 760.0F}});
+    store->active_nav = 0;
+    store->luban_tab = 0;
+    ui.Pump();
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -2283,6 +2408,7 @@ int main(int argc, char** argv) {
     TestSearchBoxes(ctx, ui, store);
     TestThemeAndDisabledControls(ctx, ui, store);
     TestUnifiedRefreshStates(ctx, ui, store);
+    TestLubanStackStudio(ctx, ui, store);
 
     if (ctx.anomalies.empty()) {
         std::cout << "UI layout test passed with 0 anomalies.\n";

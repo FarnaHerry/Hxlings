@@ -2276,6 +2276,261 @@ public:
         }
     }
 
+    void RefreshSavedLubanStacks(TaskScope tasks) {
+        if (skip_initial_refresh) return;
+        auto self = shared_from_this();
+        tasks.Launch([self]() -> Task<void> {
+            std::vector<SavedLubanStackInfo> items = co_await RunWorker([]() {
+                return ListSavedLubanStacks();
+            });
+            self->saved_luban_stacks = std::move(items);
+        });
+    }
+
+    bool SaveLubanStackDraft(
+        TaskScope tasks,
+        ToastHandle toast,
+        std::string name,
+        std::string content,
+        std::string format
+    ) {
+        if (skip_initial_refresh) {
+            ShowToastSafe("测试模式下跳过保存本地蓝图", toast);
+            return false;
+        }
+        const auto saved = SaveLubanStackFile(name, content, format);
+        if (!saved.has_value()) {
+            ShowToastSafe("保存本地蓝图失败", toast);
+            return false;
+        }
+        ShowToastSafe("已保存蓝图: " + mcpplibs::os::fs::utf8(saved->filename()), toast);
+        RefreshSavedLubanStacks(tasks);
+        return true;
+    }
+
+    void DeleteSavedLubanStack(
+        TaskScope tasks,
+        ToastHandle toast,
+        std::filesystem::path path,
+        std::string display_name
+    ) {
+        if (skip_initial_refresh) {
+            ShowToastSafe("测试模式下跳过删除本地蓝图", toast);
+            return;
+        }
+        if (DeleteLubanStackFile(path)) {
+            ShowToastSafe("已删除蓝图: " + display_name, toast);
+            RefreshSavedLubanStacks(tasks);
+        } else {
+            ShowToastSafe("删除蓝图失败", toast);
+        }
+    }
+
+    void SyncLubanConfigsForStackAsync(
+        TaskScope tasks,
+        ToastHandle toast,
+        std::vector<std::string> env_names
+    ) {
+        if (skip_initial_refresh || env_names.empty()) return;
+        auto self = shared_from_this();
+        LubanClient cli = luban_client_;
+        if (!cli.IsAvailable()) cli.RefreshDiscoveredPaths();
+        tasks.Launch([self, toast, cli, env_names = std::move(env_names)]() mutable -> Task<void> {
+            std::map<std::string, LubanEnvConfigDetail> synced = co_await RunWorker(
+                [cli, env_names = std::move(env_names)]() {
+                    std::map<std::string, LubanEnvConfigDetail> out;
+                    if (!cli.IsAvailable()) return out;
+                    for (const auto& name : env_names) {
+                        if (auto cfg = cli.QueryEnvConfig(name); cfg.has_value()) {
+                            out[name] = std::move(*cfg);
+                        }
+                    }
+                    return out;
+                });
+            if (!synced.empty()) {
+                self->luban_config_cache.Update([&](std::map<std::string, LubanEnvConfigDetail>& m) {
+                    for (auto& [k, v] : synced) {
+                        m[k] = std::move(v);
+                    }
+                });
+                self->ShowToastSafe("已同步现有环境配置，Diff 计划已更新", toast);
+            } else {
+                self->ShowToastSafe("未发现需要同步的已存在环境配置", toast);
+            }
+        });
+    }
+
+    void ApplyLubanStackAsync(
+        TaskScope tasks,
+        ToastHandle toast,
+        LubanStackSpec spec,
+        bool dry_run = false
+    ) {
+        LubanClient cli = luban_client_;
+        if (!cli.IsAvailable()) cli.RefreshDiscoveredPaths();
+        const std::string title = dry_run
+                                      ? ("预演多环境蓝图: " + spec.name)
+                                      : ("应用多环境蓝图: " + spec.name);
+        ExecuteOperation(
+            tasks,
+            toast,
+            title,
+            [cli, spec, dry_run](auto on_ev, auto on_line, auto ctrl) -> CommandOutcome {
+                if (!cli.IsAvailable()) {
+                    CommandOutcome fail;
+                    fail.ok = false;
+                    fail.exit_code = 127;
+                    fail.error_message = "未检测到 luban 可执行文件，请先安装 luban";
+                    return fail;
+                }
+
+                const std::vector<LubanEnvironment> live_envs = cli.ListEnvironments();
+                std::map<std::string, LubanEnvConfigDetail> live_configs;
+                for (const auto& desired : spec.environments) {
+                    const bool exists = std::ranges::any_of(
+                        live_envs, [&](const LubanEnvironment& e) { return e.name == desired.name; });
+                    if (exists) {
+                        if (auto cfg = cli.QueryEnvConfig(desired.name); cfg.has_value()) {
+                            live_configs[desired.name] = std::move(*cfg);
+                        }
+                    }
+                }
+
+                const LubanStackPlan plan = BuildLubanStackPlan(spec, live_envs, live_configs);
+                on_line(
+                    "[编排计划] " + spec.name +
+                    ": 新建 " + std::to_string(plan.create_count) +
+                    " / 更新配置 " + std::to_string(plan.configure_count) +
+                    " / 已就绪 " + std::to_string(plan.unchanged_count)
+                );
+
+                if (dry_run) {
+                    for (const auto& act : plan.actions) {
+                        on_line("  - [" + act.env_name + "] " + act.summary);
+                    }
+                    CommandOutcome ok_out;
+                    ok_out.ok = true;
+                    ok_out.exit_code = 0;
+                    return ok_out;
+                }
+
+                for (const auto& act : plan.actions) {
+                    if (ctrl && ctrl->cancel_requested.load(std::memory_order_acquire)) {
+                        CommandOutcome cancelled;
+                        cancelled.ok = false;
+                        cancelled.exit_code = 130;
+                        cancelled.error_message = "Cancelled";
+                        return cancelled;
+                    }
+
+                    if (act.kind == LubanStackActionKind::UpToDate) {
+                        on_line("[跳过] " + act.env_name + ": 已就绪且配置一致");
+                        continue;
+                    }
+
+                    if (act.kind == LubanStackActionKind::Create) {
+                        on_line("[新建] 正在创建环境 " + act.env_name + " ...");
+                        LubanCreateOptions opts{
+                            .name = act.spec.name,
+                            .edition = act.spec.edition,
+                            .desktop = act.spec.desktop,
+                            .enter_mode = act.spec.enter_mode,
+                            .mode = act.spec.mode,
+                            .persist = act.spec.persist,
+                            .shell = act.spec.shell,
+                            .policy = act.spec.policy,
+                            .tz = act.spec.tz,
+                            .runtime = act.spec.runtime,
+                            .user = act.spec.user,
+                            .proxy = act.spec.proxy,
+                            .carrier = act.spec.carrier,
+                            .no_password = act.spec.no_password,
+                            .dry_run = false,
+                            .xpkgs = act.spec.xpkgs,
+                            .allows = act.spec.allows,
+                        };
+                        CommandOutcome step_out = cli.CreateEnvironment(opts, on_ev, ctrl);
+                        if (!step_out.ok) return step_out;
+
+                        LubanConfigPatch post_patch;
+                        if (!act.spec.fetch.empty()) post_patch.fetch = act.spec.fetch;
+                        if (!act.spec.observe.empty()) post_patch.observe = act.spec.observe;
+                        if (!act.spec.mounts.empty()) post_patch.mounts = act.spec.mounts;
+                        if (!post_patch.Empty()) {
+                            on_line("[配置] 为新建环境 " + act.env_name + " 应用附加策略/挂载...");
+                            CommandOutcome post_out = cli.ConfigureEnvironment(act.env_name, post_patch, on_ev, ctrl);
+                            if (!post_out.ok) return post_out;
+                        }
+                        continue;
+                    }
+
+                    if (act.kind == LubanStackActionKind::Configure && !act.config_patch.Empty()) {
+                        on_line("[更新] 正在对齐环境 " + act.env_name + " 配置: " + act.summary);
+                        CommandOutcome cfg_out = cli.ConfigureEnvironment(act.env_name, act.config_patch, on_ev, ctrl);
+                        if (!cfg_out.ok) return cfg_out;
+                    }
+                }
+
+                CommandOutcome done_out;
+                done_out.ok = true;
+                done_out.exit_code = 0;
+                return done_out;
+            },
+            [dry_run](const std::shared_ptr<XlingsStore>& s, TaskScope t, const CommandOutcome&) {
+                if (!dry_run) {
+                    s->loaded_luban_detail_name_.clear();
+                    s->RefreshLuban(t, true);
+                }
+            }
+        );
+    }
+
+    void StopLubanStackAsync(TaskScope tasks, ToastHandle toast, LubanStackSpec spec) {
+        LubanClient cli = luban_client_;
+        if (!cli.IsAvailable()) cli.RefreshDiscoveredPaths();
+        ExecuteOperation(
+            tasks,
+            toast,
+            "停止蓝图内环境: " + spec.name,
+            [cli, spec](auto on_ev, auto on_line, auto ctrl) -> CommandOutcome {
+                if (!cli.IsAvailable()) {
+                    CommandOutcome fail;
+                    fail.ok = false;
+                    fail.exit_code = 127;
+                    fail.error_message = "未检测到 luban 可执行文件，请先安装 luban";
+                    return fail;
+                }
+                const std::vector<LubanEnvironment> live_envs = cli.ListEnvironments();
+                for (const auto& desired : spec.environments) {
+                    if (ctrl && ctrl->cancel_requested.load(std::memory_order_acquire)) {
+                        CommandOutcome cancelled;
+                        cancelled.ok = false;
+                        cancelled.exit_code = 130;
+                        cancelled.error_message = "Cancelled";
+                        return cancelled;
+                    }
+                    const auto it = std::ranges::find_if(
+                        live_envs, [&](const LubanEnvironment& e) { return e.name == desired.name; });
+                    if (it != live_envs.end() && it->running) {
+                        on_line("[停止] 正在停止运行中环境 " + desired.name + " ...");
+                        CommandOutcome stop_out = cli.StopEnvironment(desired.name, on_ev, ctrl);
+                        if (!stop_out.ok) return stop_out;
+                    } else {
+                        on_line("[跳过] " + desired.name + ": 未在运行");
+                    }
+                }
+                CommandOutcome done_out;
+                done_out.ok = true;
+                done_out.exit_code = 0;
+                return done_out;
+            },
+            [](const std::shared_ptr<XlingsStore>& s, TaskScope t, const CommandOutcome&) {
+                s->loaded_luban_detail_name_.clear();
+                s->RefreshLuban(t, true);
+            }
+        );
+    }
+
     void SetConfigThemeAsync(TaskScope tasks, ToastHandle toast, std::string theme_name) {
         const XlingsClient client = client_;
         ExecuteOperation(

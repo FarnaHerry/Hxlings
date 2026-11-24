@@ -7,6 +7,10 @@
   - `xlings.parser`（`src/xlings_parser.cppm`）：NDJSON / JSON 解析、空白规范化、`SplitPackageSpec`、版本比较及批量清理/更新计划推导。
   - `xlings.process`（`src/xlings_process.cppm`）：基于 `mcpplibs.os` 定位 `xlings` 二进制并流式派生子进程（支持 `ActiveProcessControl` 取消与 Windows `CreateProcessW`/`CREATE_NO_WINDOW` 无闪烁启动，并用 `Win32EnvGuard`/`Win32HandleGuard`/`PidResetGuard` 保证异常安全），并提供跨平台默认浏览器拉起 `OpenExternalUrl`、本地路径打开 `OpenLocalPath` 与脱离式重启 `LaunchDetachedExecutable`。
   - `xlings.client`（`src/xlings_client.cppm`）：封装所有 `xlings` 读写命令，将进程输出映射为强类型结果或结构化事件。
+- **LubanOS 与多环境编排层**：
+  - `hxlings.luban.types`（`src/luban_types.cppm`）：宿主门控/模式/缺失工具状态、Luban 环境生命周期、官方发行版/桌面目录与蓝图清单（`LubanStackSpec` / `LubanStackPlan` / `SavedLubanStackInfo`）结构体。
+  - `hxlings.luban.client`（`src/luban_client.cppm`）：定位 `luban` 与 `luban-os`，实现容错 JSON 解析（剥离前置 `[warn]` 行并解包 `{"result":...}`）、CLI 参数构建、只读查询、流式生命周期命令及 `luban-os` 分离式拉起。
+  - `hxlings.luban.stack`（`src/luban_stack.cppm`）：声明式多环境编排引擎（`hxlings.luban-stack/v1`），提供 JSON / TOML 自动解析与往返序列化、合法性校验、与当前环境的最小增量 `Diff` 计划推导（`BuildLubanStackPlan`）、从现有环境导出（`ExportEnvironmentsToStack`）、内置精选模板及本地目录 `os::dirs::config()/hxlings/luban-stacks` 持久化 CRUD。
 - **客户端基础设施层**：
   - `hxlings.settings`（`src/app_settings.cppm`）：客户端本地 JSON 配置持久化（`os::dirs::config()/hxlings/settings.json`）。
   - `hxlings.platform_icon`（`src/platform_icon.cppm`）：Linux/macOS/Windows 启动环境适配、应用/窗口图标设置及原生主题同步 `ApplyPlatformThemeMode`（Windows `uxtheme.dll`/`dwmapi.dll`、macOS `[NSApp setAppearance:]`、Linux GTK `gtk-application-prefer-dark-theme`）。
@@ -17,7 +21,7 @@
   - `app.resources`（由 `hrc` 自动生成）：基于 `resources/images/` 生成 `app::images::hxlings` 与 `app::images::tray_icon`。
 - **状态与视图层**：
   - `hxlings.store`（`src/store.cppm`）：统一应用状态容器 `XlingsStore`（继承 `std::enable_shared_from_this`）与异步任务编排。
-  - `hxlings.components`（`src/components.cppm`）、`hxlings.console`（`src/task_console.cppm`）及 6 个页面模块 `hxlings.page.{dashboard,packages,store,subos,indexes,settings}`。
+  - `hxlings.components`（`src/components.cppm`）、`hxlings.console`（`src/task_console.cppm`）及 7 个页面模块 `hxlings.page.{dashboard,packages,store,subos,luban,indexes,settings}`。
   - `app`（`src/app.cppm`）与入口 `src/main.cpp`（先通过 `ProcessSingleInstanceScope::AcquireDefault()` 获取单实例控制权，再调用 `PreparePlatformStartup()` 后进入 `huxerui::RunApplication()`）。
 
 ## 2. 渐进式并发加载与按需懒加载
@@ -30,8 +34,9 @@
   5. `ListRepos` + `QuerySelfLog(25)`：仓库概览与最近日志。
 - **懒加载域（按需后台拉取）**：
   - 已安装详情（`EnsureInstalledDetailLoaded`）与 SubOS 详情（`EnsureSubosDetailLoaded`）分别在切换到 `nav == 1` / `nav == 3` 时按需加载。
-  - 索引页面（`nav == 4`）通过 `RefreshIndexes` 拆分轻量仓库/本地 xpkg 查询与耗时较长（实测约 2.36 s）的 `ListIndexVersions()` 远程快照查询，均不阻塞 UI 交互。
-  - `xlings` 全局配置（`RefreshXlingsConfig` / `RefreshConfigThemes`）、网络端点与诊断（`RefreshNetworkEndpoints`）、以及 `Profile` 代际（`RefreshProfiles`）分别在进入设置页标签 1 与标签 2 时按需加载。
+  - `LubanOS`（`nav == 4`）通过 `RefreshLuban`、`LoadLubanDetail` 与 `RefreshSavedLubanStacks` 在进入页面时按需探测宿主后端/环境/官方目录及本地 `~/.config/hxlings/luban-stacks` 蓝图库，`RefreshCore` 绝不触发 `luban` 子进程；多环境蓝图应用（`ApplyLubanStackAsync`）与停止（`StopLubanStackAsync`）经由 `mutation_sequence_` 串行执行并支持实时配置同步（`SyncLubanConfigsForStackAsync`）与 `.tar`/`.luban`/`.qcow2`/`.iso` 导出桥接（含 Podman 导入命令）。
+  - 索引页面（`nav == 5`）通过 `RefreshIndexes` 拆分轻量仓库/本地 xpkg 查询与耗时较长（实测约 2.36 s）的 `ListIndexVersions()` 远程快照查询，均不阻塞 UI 交互。
+  - `xlings` 全局配置（`RefreshXlingsConfig` / `RefreshConfigThemes`）、网络端点与诊断（`RefreshNetworkEndpoints`）、以及 `Profile` 代际（`RefreshProfiles`）分别在进入设置页（`nav == 6`）标签 1 与标签 2 时按需加载。
   - SubOS 治理面（`LoadSubosGovernance`：合并 `status`/`config`/`ps`/`requests`/`report`/`info`/`doctor` 查询）仅在切换到 `SubOS` 页“策略”/“会话”标签或手动刷新时按 `hash(subos_name)` 懒加载。
 - **定向刷新**：各写操作完成后仅调用受影响域的刷新函数（如修改仓库/快照仅调用 `RefreshIndexes(t, true)`，修改 `xlings config` 仅调用 `RefreshXlingsConfig(t, true)`）。
 
