@@ -108,7 +108,7 @@ View DashboardPage() {
             [store, tasks, toast] {
                 store->RunDoctorAsync(tasks, toast, false, false, false, false);
                 store->settings_tab = 2;
-                store->active_nav = 5;
+                store->active_nav = 6;
             },
             true,
             icons::WrenchIcon(),
@@ -120,7 +120,7 @@ View DashboardPage() {
             [store, tasks, toast] {
                 store->RunSelfCleanAsync(tasks, toast, true);
                 store->settings_tab = 2;
-                store->active_nav = 5;
+                store->active_nav = 6;
             },
             true,
             icons::TrashIcon(),
@@ -216,7 +216,7 @@ View DashboardPage() {
             active_snap_label,
             icons::IndexIcon(),
             sp.warning,
-            [store] { store->active_nav = 4; }
+            [store] { store->active_nav = 5; }
         ).With(Grow(1.0F)),
     }.With(Spacing(14.0F));
 
@@ -264,7 +264,7 @@ View DashboardPage() {
                             [store, tasks, toast] {
                                 store->RunDoctorAsync(tasks, toast, true, true, true, false);
                                 store->settings_tab = 2;
-                                store->active_nav = 5;
+                                store->active_nav = 6;
                             },
                             true,
                             std::nullopt,

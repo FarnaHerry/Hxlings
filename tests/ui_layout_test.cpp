@@ -23,6 +23,7 @@ import hxlings.store;
 import xlings.types;
 import xlings.parser;
 import hxlings.updater;
+import hxlings.luban.types;
 
 using namespace huxerui;
 using namespace huxerui::testing;
@@ -612,6 +613,133 @@ std::shared_ptr<XlingsStore> MakeSeededStore() {
         .checked_at = "2026-11-23 09:45:00",
     };
 
+    store->luban_available = true;
+    store->luban_os_available = false;
+    store->luban_loaded = true;
+    store->luban_host_status = LubanHostStatus{
+        .ready = true,
+        .os = "linux",
+        .arch = "x86_64",
+        .backend_name = "bwrap",
+        .backend_path = "/usr/bin/bwrap",
+        .sandbox_ready = true,
+        .machine_ready = true,
+        .desktop_ready = false,
+        .desktop_route = "xlings install luban-os",
+        .missing_tools = {
+            LubanToolStatus{
+                .name = "virtiofsd",
+                .package = "xim:virtiofsd",
+                .install_cmd = "xlings install xim:virtiofsd",
+                .available = false,
+            },
+        },
+    };
+    store->luban_envs = std::vector<LubanEnvironment>{
+        LubanEnvironment{
+            .name = "dev-core",
+            .kind = "rootfs",
+            .edition = "core",
+            .carrier = "bwrap",
+            .shell = "bash",
+            .packages = 18,
+            .running = true,
+        },
+        LubanEnvironment{
+            .name = "agent-box",
+            .kind = "rootfs",
+            .edition = "dev",
+            .carrier = "bwrap",
+            .shell = "zsh",
+            .desktops = {"xfce"},
+            .packages = 24,
+            .running = false,
+        },
+    };
+    store->luban_catalog = LubanCatalog{
+        .distributions = {
+            LubanCatalogItem{
+                .group = "distributions",
+                .name = "core",
+                .ref = "luban:core",
+                .version = "2026.11",
+                .status = "stable",
+                .title_zh = "Luban Core 基础系统",
+                .summary_zh = "最小可复现基础 Rootfs 与 xlings 包管理运行时",
+                .highlights = {"bwrap", "minimal"},
+                .tier = 1,
+                .available = true,
+            },
+            LubanCatalogItem{
+                .group = "distributions",
+                .name = "dev",
+                .ref = "luban:dev",
+                .version = "2026.11",
+                .status = "stable",
+                .title_zh = "Luban Dev 开发工作站",
+                .summary_zh = "预置现代构建链与常用系统开发工具",
+                .highlights = {"toolchain", "multi-arch"},
+                .tier = 1,
+                .available = true,
+            },
+        },
+        .desktops = {
+            LubanCatalogItem{
+                .group = "desktops",
+                .name = "xfce",
+                .ref = "luban:desktop-xfce",
+                .version = "4.18",
+                .status = "stable",
+                .title_zh = "XFCE 轻量桌面",
+                .summary_zh = "低开销离线/远程隔离桌面会话",
+                .gpu_hint = "virgl / swrast",
+                .highlights = {"lightweight", "x11"},
+                .tier = 1,
+                .available = true,
+            },
+            LubanCatalogItem{
+                .group = "desktops",
+                .name = "gnome",
+                .ref = "luban:desktop-gnome",
+                .version = "46",
+                .status = "stable",
+                .title_zh = "GNOME 完整桌面",
+                .summary_zh = "标准 Wayland/GUI 工作站桌面",
+                .gpu_hint = "virgl",
+                .highlights = {"wayland", "desktop"},
+                .tier = 2,
+                .available = true,
+            },
+        },
+    };
+    store->selected_luban_env = std::string("dev-core");
+    store->selected_luban_status = LubanEnvStatusDetail{
+        .name = "dev-core",
+        .kind = "rootfs",
+        .edition = "core",
+        .carrier = "bwrap",
+        .mode = "sandbox",
+        .persist = "rootfs",
+        .enter = "unprivileged",
+        .network = "nat",
+        .shell = "bash",
+        .notes = {"seeded test environment"},
+        .packages = 18,
+        .running = true,
+    };
+    store->selected_luban_config = LubanEnvConfigDetail{
+        .name = "dev-core",
+        .mode = "sandbox",
+        .persist = "rootfs",
+        .shell = "bash",
+        .policy_extends = "dev",
+        .net = "nat",
+        .observe_level = "standard",
+        .fetch_policy = "auto",
+    };
+    store->selected_luban_history = std::string("generation 1 (active)");
+    store->selected_luban_logs = std::string("[2026-11-24] [luban] dev-core ready");
+
     return store;
 }
 
@@ -707,8 +835,8 @@ void AuditCurrentScreen(
     const std::string scope = sc.str();
 
     // 1. Shell sidebar nav buttons
-    const std::array<const char*, 6> nav_keys{
-        "nav-dashboard", "nav-packages", "nav-store", "nav-subos", "nav-indexes", "nav-settings"
+    const std::array<const char*, 7> nav_keys{
+        "nav-dashboard", "nav-packages", "nav-store", "nav-subos", "nav-luban", "nav-indexes", "nav-settings"
     };
     std::vector<UiNodeInfo> nav_nodes;
     for (const char* nk : nav_keys) {
@@ -1144,6 +1272,58 @@ void AuditAllPagesAtViewport(
         }
     }
 
+    // LubanOS (all 3 outer tabs, 3 env detail tabs, and NewLubanEnv modal)
+    store->luban_tab = 0;
+    SafeTap(ctx, vp_tag + " / LubanOS", ui.Find(UiSelector::Key("nav-luban")), "nav-luban");
+    ui.Pump();
+    AuditCurrentScreen(ctx, ui, w, h, "LubanOS[Environments]", "page-luban", true);
+
+    if (SafeTap(ctx, vp_tag + " / LubanOS[RunCmd]", ui.Find(UiSelector::Text("执行命令")), "执行命令")) {
+        ui.Pump();
+        AuditCurrentScreen(ctx, ui, w, h, "LubanOS[RunCmd]", "page-luban", true);
+    }
+
+    if (SafeTap(ctx, vp_tag + " / LubanOS[HistoryLogs]", ui.Find(UiSelector::Text("历史与日志")), "历史与日志")) {
+        ui.Pump();
+        AuditCurrentScreen(ctx, ui, w, h, "LubanOS[HistoryLogs]", "page-luban", true);
+    }
+
+    if (SafeTap(ctx, vp_tag + " / LubanOS[Overview]", ui.Find(UiSelector::Text("概览与配置")), "概览与配置")) {
+        ui.Pump();
+    }
+
+    if (SafeTap(ctx, vp_tag + " / NewLubanEnvDialog", ui.Find(UiSelector::Text("新建环境")), "新建环境")) {
+        ui.Pump(500ms);
+        ui.Pump();
+        if (!ui.Find(UiSelector::Key("new-luban-env-dialog")).Exists()) {
+            ctx.Flag(vp_tag + " / NewLubanEnvDialog", "NewLubanEnvDialog did not mount");
+        }
+        AuditCurrentScreen(ctx, ui, w, h, "NewLubanEnvDialog", "page-luban", false, true);
+        if (SafeTap(ctx, vp_tag + " / NewLubanEnvDialog", ui.Find(UiSelector::Text("取消")), "取消(NewLubanEnvDialog)")) {
+            try {
+                ui.PumpUntil([&] { return !ui.Find(UiSelector::Key("new-luban-env-dialog")).Exists(); },
+                             {.timeout = 2s, .step = 50ms});
+            } catch (const UiTestFailure& ex) {
+                ctx.Flag(vp_tag + " / NewLubanEnvDialog",
+                         std::string("NewLubanEnvDialog still mounted after cancel: ") + ex.what());
+            }
+        }
+    }
+
+    if (SafeTap(ctx, vp_tag + " / LubanOS[Catalog]", ui.Find(UiSelector::Text("发行版与桌面目录")), "发行版与桌面目录")) {
+        ui.Pump();
+        AuditCurrentScreen(ctx, ui, w, h, "LubanOS[Catalog]", "page-luban");
+    }
+
+    if (SafeTap(ctx, vp_tag + " / LubanOS[Stacks]", ui.Find(UiSelector::Text("蓝图编排")), "蓝图编排")) {
+        ui.Pump();
+        AuditCurrentScreen(ctx, ui, w, h, "LubanOS[Stacks]", "page-luban");
+    }
+
+    if (SafeTap(ctx, vp_tag + " / LubanOS[BackToEnvs]", ui.Find(UiSelector::Text("环境与机器")), "环境与机器")) {
+        ui.Pump();
+    }
+
     // Indexes + AddRepo dialog
     SafeTap(ctx, vp_tag + " / Indexes", ui.Find(UiSelector::Key("nav-indexes")), "nav-indexes");
     ui.Pump();
@@ -1359,11 +1539,55 @@ void TestDuplicateDataNoDuplicateKeys(AuditContext& ctx, UiTest& ui, const std::
         };
         store->index_versions = {dup_repo, dup_repo};
 
-        for (const char* nav_key : {"nav-packages", "nav-store", "nav-subos", "nav-indexes"}) {
+        LubanEnvironment dup_luban{
+            .name = "dev-core",
+            .kind = "rootfs",
+            .edition = "core",
+            .carrier = "bwrap",
+            .shell = "bash",
+            .packages = 18,
+            .running = true,
+        };
+        store->luban_envs = {dup_luban, dup_luban};
+        store->selected_luban_env = "dev-core";
+
+        LubanCatalogItem dup_dist{
+            .group = "distributions",
+            .name = "core",
+            .ref = "luban:core",
+            .version = "2026.11",
+            .status = "stable",
+            .title_zh = "Luban Core",
+            .summary_zh = "duplicate dist item",
+            .tier = 1,
+            .available = true,
+        };
+        LubanCatalogItem dup_desk{
+            .group = "desktops",
+            .name = "xfce",
+            .ref = "luban:desktop-xfce",
+            .version = "4.18",
+            .status = "stable",
+            .title_zh = "XFCE",
+            .summary_zh = "duplicate desk item",
+            .tier = 1,
+            .available = true,
+        };
+        store->luban_catalog = LubanCatalog{
+            .distributions = {dup_dist, dup_dist},
+            .desktops = {dup_desk, dup_desk},
+        };
+
+        for (const char* nav_key : {"nav-packages", "nav-store", "nav-subos", "nav-luban", "nav-indexes"}) {
             if (SafeTap(ctx, "DuplicateKeysRegression", ui.Find(UiSelector::Key(nav_key)), nav_key)) {
                 ui.Pump();
             }
         }
+        store->luban_tab = 1;
+        store->active_nav = 4;
+        ui.Pump();
+        store->luban_tab = 0;
+        ui.Pump();
     } catch (const std::exception& ex) {
         ctx.Flag("DuplicateKeysRegression", std::string("Exception during duplicate data recomposition: ") + ex.what());
     }
@@ -1388,9 +1612,29 @@ void TestCrossPlatformShortcuts(AuditContext& ctx, UiTest& ui, const std::shared
         ctx.Flag("Shortcuts", "Primary+3 did not switch to Store page");
     }
 
-    ui.PressKey(Key::Comma, PrimaryModifier());
+    ui.PressKey(Key::Digit5, PrimaryModifier());
+    ui.Pump();
+    if (store->active_nav.Get() != 4) {
+        ctx.Flag("Shortcuts", "Primary+5 did not switch to LubanOS page");
+    }
+
+    ui.PressKey(Key::Digit6, PrimaryModifier());
     ui.Pump();
     if (store->active_nav.Get() != 5) {
+        ctx.Flag("Shortcuts", "Primary+6 did not switch to Indexes page");
+    }
+
+    ui.PressKey(Key::Digit7, PrimaryModifier());
+    ui.Pump();
+    if (store->active_nav.Get() != 6) {
+        ctx.Flag("Shortcuts", "Primary+7 did not switch to Settings page");
+    }
+
+    store->active_nav = 0;
+    ui.Pump();
+    ui.PressKey(Key::Comma, PrimaryModifier());
+    ui.Pump();
+    if (store->active_nav.Get() != 6) {
         ctx.Flag("Shortcuts", "Primary+Comma did not switch to Settings page");
     }
 
@@ -1673,6 +1917,8 @@ void TestSearchBoxes(AuditContext& ctx, UiTest& ui, const std::shared_ptr<Xlings
     verify_search_box(2, "page-store", "store-search-input", true, "gcc");
     verify_search_box(1, "page-packages", "packages-filter-input", true, "llvm");
     verify_search_box(3, "page-subos", "subos-shim-filter-input", true, "gcc");
+    store->luban_tab = 0;
+    verify_search_box(4, "page-luban", "luban-filter-input", true, "dev");
 
     store->SetThemeMode(ThemeMode::Dark);
     ui.Pump();
@@ -1857,7 +2103,7 @@ void TestUnifiedRefreshStates(AuditContext& ctx, UiTest& ui, const std::shared_p
     store->SetThemeMode(ThemeMode::Light);
 
     // 2. Indexes page
-    store->active_nav = 4;
+    store->active_nav = 5;
     ui.Pump();
     verify_in_place("UnifiedRefresh / Indexes(local)", "indexes-refresh-btn", [&](bool v) {
         store->loading_indexes = v;
@@ -1867,7 +2113,7 @@ void TestUnifiedRefreshStates(AuditContext& ctx, UiTest& ui, const std::shared_p
     });
 
     // 3. Settings Tab 0 / 1 / 2
-    store->active_nav = 5;
+    store->active_nav = 6;
     store->settings_tab = 0;
     ui.Pump();
     const AppUpdateState saved_upd = store->app_update_state.Get();
@@ -1960,6 +2206,20 @@ void TestUnifiedRefreshStates(AuditContext& ctx, UiTest& ui, const std::shared_p
         ui.Pump();
         verify_in_place("UnifiedRefresh / SubOSPolicy", "subos-refresh-policy-btn", [&](bool v) {
             store->loading_subos_governance = v;
+        });
+    }
+
+    // 5. LubanOS outer refresh + detail refresh
+    store->active_nav = 4;
+    store->luban_tab = 0;
+    ui.Pump();
+    verify_in_place("UnifiedRefresh / Luban", "luban-refresh-btn", [&](bool v) {
+        store->loading_luban = v;
+    });
+    if (SafeTap(ctx, "UnifiedRefresh / Luban[HistoryLogs]", ui.Find(UiSelector::Text("历史与日志")), "历史与日志")) {
+        ui.Pump();
+        verify_in_place("UnifiedRefresh / LubanDetail", "luban-refresh-detail-btn", [&](bool v) {
+            store->loading_luban_detail = v;
         });
     }
 

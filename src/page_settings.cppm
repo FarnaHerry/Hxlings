@@ -766,7 +766,7 @@ View SettingsPage() {
     const std::string& clean_out = store->clean_output.Get();
 
     Lifecycle([store, tasks, tab] {
-        if (store->skip_initial_refresh || store->active_nav.Get() != 5) return;
+        if (store->skip_initial_refresh || store->active_nav.Get() != 6) return;
         if (tab == 1) {
             store->RefreshXlingsConfig(tasks, false);
         } else if (tab == 2) {

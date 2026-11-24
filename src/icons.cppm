@@ -401,4 +401,26 @@ VectorAsset FileCodeIcon(float w = 1.8F) {
     });
 }
 
+VectorAsset LubanIcon(float w = 1.8F) {
+    return VectorAsset::Create({24.0F, 24.0F}, [w](VectorBuilder& b) {
+        const auto c = Color::White();
+        const auto st = detail::RoundStroke(w);
+        Path hex;
+        hex.MoveTo({12.0F, 2.5F})
+           .LineTo({20.2F, 7.2F})
+           .LineTo({20.2F, 16.8F})
+           .LineTo({12.0F, 21.5F})
+           .LineTo({3.8F, 16.8F})
+           .LineTo({3.8F, 7.2F})
+           .Close();
+        b.StrokePath(hex, c, st);
+        Path top_v;
+        top_v.MoveTo({3.8F, 7.2F}).LineTo({12.0F, 12.0F}).LineTo({20.2F, 7.2F});
+        b.StrokePath(top_v, c, st);
+        Path stem;
+        stem.MoveTo({12.0F, 12.0F}).LineTo({12.0F, 21.5F});
+        b.StrokePath(stem, c, st);
+    });
+}
+
 } // namespace hxlings::icons

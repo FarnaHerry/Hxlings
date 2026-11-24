@@ -40,7 +40,7 @@ struct ShortcutDescriptor {
 
 inline std::vector<ShortcutDescriptor> AppShortcutCatalog() {
     std::vector<ShortcutDescriptor> list{
-        {FormatShortcut("1") + " ~ " + FormatShortcut("6"), "页面导航", "切换 6 个主工作区视图"},
+        {FormatShortcut("1") + " ~ " + FormatShortcut("7"), "页面导航", "切换 7 个主工作区视图"},
         {FormatShortcut(","), "页面导航", "打开「设置与诊断」"},
         {FormatShortcut("K"), "搜索与操作", "跳转到「探索与安装」并聚焦搜索框"},
         {FormatShortcut("F"), "搜索与操作", "聚焦当前页面筛选框 / 打开软件搜索"},

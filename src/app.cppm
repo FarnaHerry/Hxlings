@@ -17,6 +17,7 @@ import hxlings.page.dashboard;
 import hxlings.page.packages;
 import hxlings.page.store;
 import hxlings.page.subos;
+import hxlings.page.luban;
 import hxlings.page.indexes;
 import hxlings.page.settings;
 
@@ -107,12 +108,16 @@ void InstallApplication(ApplicationContext& context) {
                 if (auto st = weak_store.lock()) st->active_nav = 3;
                 ensure_main_window();
             }),
-            MenuItem("索引与配方", [weak_store, ensure_main_window] {
+            MenuItem("LubanOS 系统", [weak_store, ensure_main_window] {
                 if (auto st = weak_store.lock()) st->active_nav = 4;
                 ensure_main_window();
             }),
-            MenuItem("设置与诊断", [weak_store, ensure_main_window] {
+            MenuItem("索引与配方", [weak_store, ensure_main_window] {
                 if (auto st = weak_store.lock()) st->active_nav = 5;
+                ensure_main_window();
+            }),
+            MenuItem("设置与诊断", [weak_store, ensure_main_window] {
+                if (auto st = weak_store.lock()) st->active_nav = 6;
                 ensure_main_window();
             }),
             MenuSection{},
@@ -283,7 +288,8 @@ View MainShell(bool effective_dark) {
     window.OnShortcut(Key::Digit4, primary, [store] { store->active_nav = 3; return true; });
     window.OnShortcut(Key::Digit5, primary, [store] { store->active_nav = 4; return true; });
     window.OnShortcut(Key::Digit6, primary, [store] { store->active_nav = 5; return true; });
-    window.OnShortcut(Key::Comma, primary, [store] { store->active_nav = 5; return true; });
+    window.OnShortcut(Key::Digit7, primary, [store] { store->active_nav = 6; return true; });
+    window.OnShortcut(Key::Comma, primary, [store] { store->active_nav = 6; return true; });
     window.OnShortcut(Key::K, primary, [store] {
         store->active_nav = 2;
         store->RequestFocusSearch();
@@ -291,7 +297,7 @@ View MainShell(bool effective_dark) {
     });
     window.OnShortcut(Key::F, primary, [store] {
         const std::size_t nav = store->active_nav.Get();
-        if (nav != 1 && nav != 2 && nav != 3) {
+        if (nav != 1 && nav != 2 && nav != 3 && nav != 4) {
             store->active_nav = 2;
         }
         store->RequestFocusSearch();
@@ -361,6 +367,7 @@ View MainShell(bool effective_dark) {
     const auto& env = store->env.Get();
     const auto& groups = store->installed_groups.Get();
     const auto& suboses = store->subos_list.Get();
+    const auto& luban_envs = store->luban_envs.Get();
     const auto& findings = store->system_status.Get().findings;
 
     const std::string active_subos = env.active_subos.empty() ? std::string("default") : env.active_subos;
@@ -433,17 +440,26 @@ View MainShell(bool effective_dark) {
                 : StatusBadge(std::to_string(suboses.size()), theme.colors.on_surface_variant, sp.muted_bg)
         ).With(Tooltip("SubOS 环境 (" + FormatShortcut("4") + ")")).Key("nav-subos"),
         NavItemButton(
+            "LubanOS",
+            icons::LubanIcon(),
+            nav_idx == 4,
+            [store] { store->active_nav = 4; },
+            luban_envs.empty()
+                ? View{}
+                : StatusBadge(std::to_string(luban_envs.size()), theme.colors.on_surface_variant, sp.muted_bg)
+        ).With(Tooltip("LubanOS (" + FormatShortcut("5") + ")")).Key("nav-luban"),
+        NavItemButton(
             "索引与配方",
             icons::IndexIcon(),
-            nav_idx == 4,
-            [store] { store->active_nav = 4; }
-        ).With(Tooltip("索引与配方 (" + FormatShortcut("5") + ")")).Key("nav-indexes"),
+            nav_idx == 5,
+            [store] { store->active_nav = 5; }
+        ).With(Tooltip("索引与配方 (" + FormatShortcut("6") + ")")).Key("nav-indexes"),
         NavItemButton(
             "设置与诊断",
             icons::SettingsIcon(),
-            nav_idx == 5,
-            [store] { store->active_nav = 5; }
-        ).With(Tooltip("设置与诊断 (" + FormatShortcut("6") + ")")).Key("nav-settings"),
+            nav_idx == 6,
+            [store] { store->active_nav = 6; }
+        ).With(Tooltip("设置与诊断 (" + FormatShortcut("7") + ")")).Key("nav-settings"),
         Spacer{}.With(Grow(1.0F)),
     }.With(
         Frame{.width = 212.0F},
@@ -458,6 +474,7 @@ View MainShell(bool effective_dark) {
         PackagesPage().Key("page-packages"),
         StorePage().Key("page-store"),
         SubosPage().Key("page-subos"),
+        LubanPage().Key("page-luban"),
         IndexesPage().Key("page-indexes"),
         SettingsPage().Key("page-settings"),
     }, nav_idx).With(Grow(1.0F));

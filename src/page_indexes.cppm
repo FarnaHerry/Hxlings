@@ -127,7 +127,7 @@ View IndexesPage() {
     const StatusPalette sp = ResolveStatusPalette(theme);
 
     Lifecycle([store, tasks] {
-        if (!store->skip_initial_refresh && store->active_nav.Get() == 4) {
+        if (!store->skip_initial_refresh && store->active_nav.Get() == 5) {
             store->RefreshIndexes(tasks, false);
         }
     }, store->active_nav.Get());
