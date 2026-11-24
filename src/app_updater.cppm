@@ -9,7 +9,7 @@ import xlings.process;
 
 export namespace hxlings {
 
-inline constexpr std::string_view kAppVersion = "0.1.6";
+inline constexpr std::string_view kAppVersion = "0.1.7";
 inline constexpr std::string_view kAppReleaseApiUrl =
     "https://api.github.com/repos/FarnaHerry/Hxlings/releases/latest";
 inline constexpr std::string_view kAppReleasePageUrl =
