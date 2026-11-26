@@ -3,7 +3,7 @@
 ## ADR-001：`src/` 全面采用纯 C++23 Modules（零宏与头文件）
 - **背景**：早期 `src/main.cpp` 与平台代码混杂 `#if`、`#include` 及 MSVC `#pragma comment(linker, ...)`，既破坏模块纯洁性，又在多平台构建时增加碎片化。
 - **决策**：由 `mcpp.toml` 的 `[targets.hxlings]` 声明 `kind = "app"`、`windows_subsystem = "windows"`、`windows_entry = "main"` 及 `[resources] icon`，并使用 `mcpplibs.os`（`os::process`、`os::library`、`os::dirs`、`os::fs`、`os::macos::objc`）替代原生头文件与条件编译宏。
-- **结果**：`src/` 保持 0 条预处理指令；`tests/ui_layout_test.cpp` 仍因 HuxerUI 测试宏/头接口保留 `#include`。
+- **结果**：`src/`（含 `src/ui/`）保持 0 条预处理指令；`tests/ui_layout_*_test.cpp` 仍因 HuxerUI 测试宏/头接口保留 `#include`。
 
 ## ADR-002：macOS 开发构建跳过 `bundle:*` 边缘以保证 `mcpp test` 通过
 - **背景**：HuxerUI 默认规则在 macOS 上生成的 `bundle:*` 规则引用 `${mcpp.target_file:hxlings}`，单独执行 `mcpp test`（未编译 app 主目标）时会阻塞失败。
@@ -23,7 +23,7 @@
 
 ## ADR-006：macOS 原生窗口快捷键在应用层显式绑定
 - **背景**：验证 HuxerUI 0.5.0 `appkit_adapter.mm` 后确认框架未创建默认 `NSApp.mainMenu`，导致系统级 `⌘Q` / `⌘W` / `⌘M` 不会自动生效。
-- **决策**：在 `src/app.cppm` 通过 `window.OnShortcut` 在 macOS 下显式注册 `⌘W`、`⌘Q`、`⌘M` 与 `⌃⌘F`；配合托盘关闭拦截机制，`⌘Q` 先设置 `force_quit_requested = true` 后调用 `application.Quit()`。
+- **决策**：在 `src/ui/app.cppm` 通过 `window.OnShortcut` 在 macOS 下显式注册 `⌘W`、`⌘Q`、`⌘M` 与 `⌃⌘F`；配合托盘关闭拦截机制，`⌘Q` 先设置 `force_quit_requested = true` 后调用 `application.Quit()`。
 
 ## ADR-007：任务队列与轻量化托盘模式全面对齐 HuxerUI 0.5.0 官方规范
 - **背景**：窗口关闭销毁场景下，托盘控制、提示弹窗（`ToastHandle`）和页面聚焦调度不能绑定在已退役的 `UiWindow` 生命周期上，同时需标准串行队列与可取消只读任务语义。

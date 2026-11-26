@@ -9,8 +9,9 @@
 
 ## 2. 仓库结构地图
 
-- `src/`：纯 C++23 Modules 应用源码与入口 `main.cpp`
-- `tests/`：解析/集成测试（`xlings_parser_test.cpp`）与无头布局测试（`ui_layout_test.cpp`）
+- `src/`：纯 C++23 Modules 应用核心（入口 `main.cpp`、`xlings` 适配、`luban` 引擎、状态容器 `store` 与系统能力）
+- `src/ui/`：UI 视图与样式模块（`app.cppm`、主题、图标、快捷键、公共组件、控制台与各功能页面）
+- `tests/`：解析/集成测试（`xlings_parser_test.cpp`、`xlings_runtime_test.cpp`）与无头布局测试（`ui_layout_pages_test.cpp`、`ui_layout_flows_test.cpp`）
 - `platform/`：Linux 打包图标（`hxlings.svg`）、Windows 图标（`app.ico`）与 macOS 图标（`AppIcon.icns`）
 - `resources/`：`hrc` 编译并随应用分发的应用及托盘 PNG 图标资源
 - `project-memory/`：项目共享记忆目录（架构概览、设计决策 ADR、已验证坑点）
@@ -19,8 +20,10 @@
 
 ## 3. 工程红线
 
-- `src/` 必须保持 100% 纯 C++23 Modules，禁止出现任何 `#include`、`#if`、`#pragma` 预处理指令（`tests/` 允许 `#include`）。
-- 非 Composable 文件禁止出现区分大小写的 `Use` 子串（含注释与命名），涉及：`build.mcpp`、`src/xlings_*.cppm`、`src/store.cppm`、`src/shortcuts.cppm`、`src/app_settings.cppm`、`src/platform_icon.cppm`。
+- `src/`（含 `src/ui/`）必须保持 100% 纯 C++23 Modules，禁止出现任何 `#include`、`#if`、`#pragma` 预处理指令（`tests/` 允许 `#include`）。
+- UI 与非 UI 源码分离：所有页面、弹窗、主题、图标、快捷键、公共组件、控制台及 `app.cppm` 统一放在 `src/ui/` 下；非 UI 核心、状态容器与平台能力留在 `src/`。
+- 单文件行数上限：所有源码与测试文件（`src/`、`src/ui/`、`tests/`、`build.mcpp`）单文件最大 **1000 行**；超过 1000 行时必须按职责拆分为独立模块或实现单元（拆出的 Composable `.cppm` 文件名 stem 须全局唯一，避免 `hcg:<stem>` 冲突）。
+- 非 Composable 文件禁止出现区分大小写的 `Use` 子串（含注释与命名），涉及：`build.mcpp`、`src/xlings_*.cppm`、`src/store.cppm`、`src/store_*.cpp`、`src/ui/shortcuts.cppm`、`src/app_settings.cppm`、`src/platform_icon.cppm`。
 - 动态渲染的同级视图必须使用全局唯一且稳定的 `.Key(...)`，禁止重复键导致 HuxerUI 重组崩溃。
 - 启动采用并发渐进刷新（`RefreshCore`），慢速远程索引查询（`list_index_versions`）与次级页面数据按需懒加载，严禁阻塞首屏渲染。
 - 客户端本地配置（`settings.json`）与 `xlings` 全局 CLI 配置解耦；外观、强调色与托盘开关变更禁止触发 `xlings` 子进程。
@@ -30,9 +33,10 @@
 
 ## 4. 日常验证命令
 
-- 纯模块与 `hcg` 守卫（均须无任何匹配输出）：
+- 纯模块、`hcg` 与单文件行数守卫（均须无任何匹配输出）：
   - `rg -n "^#" src/`
-  - `rg -n "Use" build.mcpp src/xlings_*.cppm src/store.cppm src/shortcuts.cppm src/app_settings.cppm src/platform_icon.cppm`
+  - `rg -n "Use" build.mcpp src/xlings_*.cppm src/store.cppm src/store_*.cpp src/ui/shortcuts.cppm src/app_settings.cppm src/platform_icon.cppm`
+  - `find src tests -type f \( -name '*.cpp' -o -name '*.cppm' -o -name '*.hpp' \) -exec sh -c 'for f; do n=$(wc -l < "$f"); [ "$n" -gt 1000 ] && echo "$f: $n"; done' _ {} +`
 - 本地构建与完整测试：
   - `mcpp build && mcpp test`
   - 若增删 `.cppm` 导入后遇到 P1689 模块图分歧报错，先执行 `mcpp clean` 再构建。
@@ -53,6 +57,6 @@
 
 | Skill 名称 | 路径 | 何时加载 |
 | --- | --- | --- |
-| `huxerui-cpp-modules` | `project-skills/huxerui-cpp-modules/SKILL.md` | 新增/修改 `src/*.cppm` UI/任务模块、处理 `hcg`/P1689 报错或编写 `ui_layout_test.cpp` 用例时 |
+| `huxerui-cpp-modules` | `project-skills/huxerui-cpp-modules/SKILL.md` | 新增/修改 `src/` 或 `src/ui/` 模块、处理 `hcg`/P1689 报错或编写 `tests/ui_layout_*_test.cpp` 用例时 |
 | `xlings-cli-integration` | `project-skills/xlings-cli-integration/SKILL.md` | 改动 `xlings` CLI 命令/NDJSON 解析、`XlingsStore` 并发刷新与批量流或排查卡顿时 |
 | `cross-platform-packaging-icons` | `project-skills/cross-platform-packaging-icons/SKILL.md` | 改动 `mcpp.toml`/`build.mcpp`、图标生成、托盘/三端窗口图标、安装包格式或 CI/Release 时 |

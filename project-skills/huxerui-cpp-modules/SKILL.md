@@ -31,7 +31,7 @@ find ~/.mcpp/git -path '*/skills/huxerui-app-development/SKILL.md'
    - 使用 `mcpplibs::os::dirs::config()` / `home()` / `temp()` 解析标准路径；持久化统一使用 `mcpplibs::os::fs::write_atomic(...)`，UTF-8 路径转换使用 `mcpplibs::os::fs::utf8(...)`。
 3. **非 Composable 文件命名守卫**：
    - 确保非视图文件（尤其新增工具模块与状态文件）全文不包含区分大小写的 `Use` 子串，提交前运行：
-     `rg -n "Use" build.mcpp src/xlings_*.cppm src/store.cppm src/shortcuts.cppm src/app_settings.cppm src/platform_icon.cppm`
+     `rg -n "Use" build.mcpp src/xlings_*.cppm src/store.cppm src/store_*.cpp src/ui/shortcuts.cppm src/app_settings.cppm src/platform_icon.cppm`
 
 ## 2. HuxerUI 组件与资源约定
 
@@ -44,13 +44,13 @@ find ~/.mcpp/git -path '*/skills/huxerui-app-development/SKILL.md'
    - **三态主题**：使用 `ThemeMode`（`Auto`/`Light`/`Dark`），在 `AppRoot()` 中于 `Auto` 模式下读取 `UseSystemThemeBrightness()`；切勿在组合阶段写入 `State`。
 3. **内建编译资源**：`mcpp.toml` 配置 `resources = "resources"` 后，模块系统生成 `app.resources`，在 UI 模块中通过 `import app.resources;` 访问 `app::images::hxlings` 与 `app::images::tray_icon`。
 
-## 3. UI 布局测试（`tests/ui_layout_test.cpp`）扩展流程
+## 3. UI 布局测试（`tests/ui_layout_pages_test.cpp` & `tests/ui_layout_flows_test.cpp`）扩展流程
 
-1. 构造离线数据使用 `MakeSeededStore()`，须设置 `skip_initial_refresh = true` 并预置已加载标志（`initial_loaded`、`indexes_loaded`、`index_versions_loaded`、`xlings_config_loaded`、`profiles_loaded`）与默认 `InitAppSettings(AppSettings{})`。
-2. 新增页面或标签页后，必须在 `AuditAllPagesAtViewport` 中同时覆盖 `1180x760` 与最小窗口尺寸 `880x560`（以及 `1440x900` 抽检），并用 `SafeTap` 切换标签或弹出对话框后调用 `AuditCurrentScreen(...)`。
+1. 构造离线数据使用 `tests/ui_layout_seed.hpp` 中的 `MakeSeededStore()`，须设置 `skip_initial_refresh = true` 并预置已加载标志（`initial_loaded`、`indexes_loaded`、`index_versions_loaded`、`xlings_config_loaded`、`profiles_loaded`）与默认 `InitAppSettings(AppSettings{})`。
+2. 新增页面或标签页后，必须在 `AuditAllPagesAtViewport` 中同时覆盖 `1180x760` 与最小窗口尺寸 `880x560`（以及 `1440x900` 抽检），并用 `SafeTap` 切换标签或弹出对话框后调用 `AuditCurrentScreen(...)`；注意保持单文件不超过 1000 行。
 3. 所有状态修改需确保通过 `SetDarkMode` 等带 `skip_initial_refresh` 保护的方法进行，避免测试污染本机 `~/.config/hxlings/settings.json`。
-4. 修改模块 `import` 列表或 `src/*.cppm` 后运行验证：
+4. 修改模块 `import` 列表或 `src/`/`src/ui/` 文件后运行验证：
    ```bash
    mcpp clean && mcpp build && mcpp test
    ```
-   确认输出 `UI layout test passed with 0 anomalies.` 与 `2 passed; 0 failed`。
+   确认输出 `UI layout test passed with 0 anomalies.` 与 `4 passed; 0 failed`。

@@ -8,7 +8,7 @@ import hxlings.theme;
 import hxlings.icons;
 import hxlings.store;
 import hxlings.components;
-import hxlings.page.packages;
+import hxlings.page.packages.dialogs;
 
 using namespace huxerui;
 

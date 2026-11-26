@@ -44,10 +44,10 @@ description: >-
 
 ## 4. 解析与单测验证清单
 
-1. 新增 JSON/NDJSON 解析或计划生成函数时，必须在 `tests/xlings_parser_test.cpp` 中使用代表性真实 CLI 样本覆盖边界用例（多活跃版本、降级包、未索引报错、跨平台/多行空白规范化）。
+1. 新增 JSON/NDJSON 解析或计划生成函数时，必须在 `tests/xlings_parser_test.cpp`（或运行时/Luban 测试归入 `tests/xlings_runtime_test.cpp`）中使用代表性真实 CLI 样本覆盖边界用例（多活跃版本、降级包、未索引报错、跨平台/多行空白规范化）。
 2. 若涉及客户端设置序列化（`src/app_settings.cppm`），同步在 `TestAppSettingsSerializationAndPersistence` 覆盖合法/非法/边界与临时目录读写。
 3. 验证命令：
-   `mcpp test`（确认 `xlings_parser_test ... ok`）。
+   `mcpp test`（确认 `xlings_parser_test ... ok` 与 `xlings_runtime_test ... ok`）。
 
 ## Extended Governance & Process Notes (v0.1.5+)
 

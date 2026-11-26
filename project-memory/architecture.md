@@ -4,8 +4,8 @@
 
 - **CLI 适配与进程层**：
   - `xlings.types`（`src/xlings_types.cppm`）：核心领域结构体（包、SubOS、索引、配置、Profile、搜索结果等）。
-  - `xlings.parser`（`src/xlings_parser.cppm`）：NDJSON / JSON 解析、空白规范化、`SplitPackageSpec`、版本比较及批量清理/更新计划推导。
-  - `xlings.process`（`src/xlings_process.cppm`）：基于 `mcpplibs.os` 定位 `xlings` 二进制并流式派生子进程（支持 `ActiveProcessControl` 取消与 Windows `CreateProcessW`/`CREATE_NO_WINDOW` 无闪烁启动，并用 `Win32EnvGuard`/`Win32HandleGuard`/`PidResetGuard` 保证异常安全），并提供跨平台默认浏览器拉起 `OpenExternalUrl`、本地路径打开 `OpenLocalPath` 与脱离式重启 `LaunchDetachedExecutable`。
+  - `xlings.parser`（`src/xlings_parser.cppm` 聚合 `src/xlings_parser_{common,packages,subos}.cppm`）：NDJSON / JSON 解析、空白规范化、`SplitPackageSpec`、版本比较、时间戳格式化及批量清理/更新计划推导。
+  - `xlings.process`（`src/xlings_process.cppm`、`src/xlings_process_env.cppm`、`src/xlings_process_win32.cppm`）：基于 `mcpplibs.os` 定位 `xlings` 二进制并流式派生子进程（支持 `ActiveProcessControl` 取消与 Windows `CreateProcessW`/`CREATE_NO_WINDOW` 无闪烁启动，并用 `Win32EnvGuard`/`Win32HandleGuard`/`PidResetGuard` 保证异常安全），并提供跨平台默认浏览器拉起 `OpenExternalUrl`、本地路径打开 `OpenLocalPath` 与脱离式重启 `LaunchDetachedExecutable`。
   - `xlings.client`（`src/xlings_client.cppm`）：封装所有 `xlings` 读写命令，将进程输出映射为强类型结果或结构化事件。
 - **LubanOS 与多环境编排层**：
   - `hxlings.luban.types`（`src/luban_types.cppm`）：宿主门控/模式/缺失工具状态、Luban 环境生命周期、官方发行版/桌面目录与蓝图清单（`LubanStackSpec` / `LubanStackPlan` / `SavedLubanStackInfo`）结构体。
@@ -16,13 +16,14 @@
   - `hxlings.platform_icon`（`src/platform_icon.cppm`）：Linux/macOS/Windows 启动环境适配、应用/窗口图标设置及原生主题同步 `ApplyPlatformThemeMode`（Windows `uxtheme.dll`/`dwmapi.dll`、macOS `[NSApp setAppearance:]`、Linux GTK `gtk-application-prefer-dark-theme`）。
   - `hxlings.single_instance`（`src/single_instance.cppm`）：基于 `mcpplibs.os.ipc` 本地 rendezvous 套接字的跨平台单实例守护与二次启动唤醒协议（Windows 通过 `AllowSetForegroundWindow` 授予主实例前台权限；支持应用退出与自更新重启提前释放）。
   - `hxlings.updater`（`src/app_updater.cppm`）：GitHub Releases 自更新核心（`kAppVersion`、Release/Asset 解析、FIPS 180-4 SHA-256 校验、平台包选型与安装/AppImage 原子替换拉起）。
-  - `hxlings.shortcuts`（`src/shortcuts.cppm`）：macOS（`⌘`）与 Linux/Windows（`Ctrl`）跨平台快捷键映射与帮助弹窗数据。
-  - `hxlings.theme`（`src/theme.cppm`）与 `hxlings.icons`（`src/icons.cppm`）：主题色板（含 `BrandPresets()`）、语义状态色与内联矢量图标。
   - `app.resources`（由 `hrc` 自动生成）：基于 `resources/images/` 生成 `app::images::hxlings` 与 `app::images::tray_icon`。
-- **状态与视图层**：
-  - `hxlings.store`（`src/store.cppm`）：统一应用状态容器 `XlingsStore`（继承 `std::enable_shared_from_this`）与异步任务编排。
-  - `hxlings.components`（`src/components.cppm`）、`hxlings.console`（`src/task_console.cppm`）及 7 个页面模块 `hxlings.page.{dashboard,packages,store,subos,luban,indexes,settings}`。
-  - `app`（`src/app.cppm`）与入口 `src/main.cpp`（先通过 `ProcessSingleInstanceScope::AcquireDefault()` 获取单实例控制权，再调用 `PreparePlatformStartup()` 后进入 `huxerui::RunApplication()`）。
+- **状态层**：
+  - `hxlings.store`（`src/store.cppm` 接口及 `src/store_{refresh,packages,subos,luban,system,updater}.cpp` 模块实现单元）：统一应用状态容器 `XlingsStore`（继承 `std::enable_shared_from_this`）与异步任务编排。
+- **UI 视图层（`src/ui/`）**：
+  - `hxlings.shortcuts`（`src/ui/shortcuts.cppm`）：macOS（`⌘`）与 Linux/Windows（`Ctrl`）跨平台快捷键映射与帮助弹窗数据。
+  - `hxlings.theme`（`src/ui/theme.cppm`）与 `hxlings.icons`（`src/ui/icons.cppm`）：主题色板（含 `BrandPresets()`）、语义状态色与内联矢量图标。
+  - `hxlings.components`（`src/ui/components.cppm`）、`hxlings.console`（`src/ui/task_console.cppm`）及 7 个页面模块 `hxlings.page.{dashboard,packages,store,subos,luban,indexes,settings}`（其中大型页面已按对话框/标签页/卡片拆分至 `page_*_{dialogs,tabs,cards,env_tab,catalog_studio}.cppm`）。
+  - `app`（`src/ui/app.cppm`）与入口 `src/main.cpp`（先通过 `ProcessSingleInstanceScope::AcquireDefault()` 获取单实例控制权，再调用 `PreparePlatformStartup()` 后进入 `huxerui::RunApplication()`）。
 
 ## 2. 渐进式并发加载与按需懒加载
 
