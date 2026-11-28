@@ -32,10 +32,12 @@ enum class UpdateInstallKind {
     WindowsMsi,
     WindowsZip,
     MacOsDmg,
+    MacOsTarXz,
     MacOsTarGz,
     LinuxAppImage,
     LinuxDeb,
     LinuxRpm,
+    LinuxTarXz,
     LinuxTarGz,
     ManualOnly,
 };
@@ -442,6 +444,9 @@ std::pair<std::optional<ReleaseAssetInfo>, UpdateInstallKind> SelectPlatformRele
         if (auto m = find_matching("macos", ".dmg", UpdateInstallKind::MacOsDmg)) {
             return {m->first, m->second};
         }
+        if (auto m = find_matching("macos", ".tar.xz", UpdateInstallKind::MacOsTarXz)) {
+            return {m->first, m->second};
+        }
         if (auto m = find_matching("macos", ".tar.gz", UpdateInstallKind::MacOsTarGz)) {
             return {m->first, m->second};
         }
@@ -471,6 +476,9 @@ std::pair<std::optional<ReleaseAssetInfo>, UpdateInstallKind> SelectPlatformRele
         return {m->first, m->second};
     }
     if (auto m = find_matching("linux", ".rpm", UpdateInstallKind::LinuxRpm)) {
+        return {m->first, m->second};
+    }
+    if (auto m = find_matching("linux", ".tar.xz", UpdateInstallKind::LinuxTarXz)) {
         return {m->first, m->second};
     }
     if (auto m = find_matching("linux", ".tar.gz", UpdateInstallKind::LinuxTarGz)) {
@@ -621,7 +629,9 @@ ApplyUpdateResult ApplyDownloadedUpdate(
             };
         }
         case UpdateInstallKind::WindowsZip:
+        case UpdateInstallKind::MacOsTarXz:
         case UpdateInstallKind::MacOsTarGz:
+        case UpdateInstallKind::LinuxTarXz:
         case UpdateInstallKind::LinuxTarGz:
         case UpdateInstallKind::ManualOnly: {
             (void)OpenLocalPath(file_path.parent_path());

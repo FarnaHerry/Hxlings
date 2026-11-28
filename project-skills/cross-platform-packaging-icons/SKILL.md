@@ -39,22 +39,23 @@ file resources/images/hxlings.png resources/images/tray_icon.png platform/window
 
 1. **打包产物矩阵**：
    - Linux（`.deb` / `.rpm` 使用 `mcpp pack hxlings --release --mode system --pkg-format <fmt>`）：直接依赖发行版原生库（`deb` 声明 `libgtk-4-1 (>= 4.14)` / `libepoxy0 (>= 1.5)` / `libsoup-3.0-0 (>= 3.0)` 等，`rpm` 声明 `lib*.so.*()(64bit)`）。[build.mcpp](../../build.mcpp) 通过生成 `glibc_compat_x86_64.c`（`--wrap=sqrtf/atan2f/remainder` 绑定 `GLIBC_2.2.5`）将可执行文件最高符号版本压到 `GLIBC_2.38`。
-   - Linux（`.tar.gz` / `.AppImage` 使用 `mcpp pack hxlings --release --mode self-contained --pkg-format <fmt>`）：随附 `lib/ld-linux-x86-64.so.2`、`lib/libc.so.6`、`lib/libm.so.6` 与 `lib/gconv/`；必须在随附加载器 `--library-path` 中将宿主 GPU 搜索路径追加在 `$here/lib` 之后（`AppImage` 由 `build.mcpp` 自动修补 `stage/hxlings` 与 `stage/run.sh`，`tar` 由 CI 重封装修补），否则 `libepoxy` 无法 `dlopen` 宿主 OpenGL 驱动导致 GTK4 退化为 `GskCairoRenderer` 粉色块；同时 `src/platform_icon.cppm` 通过 `MCPP_BUNDLE_DIR` 自动设置 `HUXERUI_RESOURCES_DIR`。
+   - Linux（`.tar.xz` / `.AppImage` 使用 `mcpp pack hxlings --release --mode self-contained --pkg-format <fmt>`）：随附 `lib/ld-linux-x86-64.so.2`、`lib/libc.so.6`、`lib/libm.so.6` 与 `lib/gconv/`；必须在随附加载器 `--library-path` 中将宿主 GPU 搜索路径追加在 `$here/lib` 之后（`AppImage` 由 `build.mcpp` 自动修补 `stage/hxlings` 与 `stage/run.sh`，`tar.xz` 由 CI 重封装修补），否则 `libepoxy` 无法 `dlopen` 宿主 OpenGL 驱动导致 GTK4 退化为 `GskCairoRenderer` 粉色块；同时 `src/platform_icon.cppm` 通过 `MCPP_BUNDLE_DIR` 自动设置 `HUXERUI_RESOURCES_DIR`。为控制自包含压缩包体积，[build.mcpp](../../build.mcpp)（`strip_linux_self_contained_stage`）与 CI 均会对 `lib/` 内未 strip 的非软链 ELF 共享库执行安全裁剪（`ld-linux-*.so*` / `libc.so*` 用 `--strip-debug`，其余用 `--strip-unneeded`），且便携包采用 `xz -T0 -6` 输出 `.tar.xz`。
    - Windows：`zip`、`msi`、`setup`（WiX v5 Burn，无需 `--mode`）：
      - `build.mcpp` 在 Windows 下调用 `mcpp::dist::wix::generate` 并传入自定义 `Hxlings-package.wxs`（含 `<MediaTemplate EmbedCab="yes" />`、`app.ico` / `ARPPRODUCTICON`、开始菜单与条件桌面快捷方式 `CREATE_DESKTOP_SHORTCUT = 1`）。
      - `platform/windows/package/` 为独立 HuxerUI 安装器 UI 子包（`hxlings-installer.exe`，使用 `xim:wix@5.0.2-1` 的 `balutil.lib` / `dutil.lib` / `mbanative.dll` 与 10 种语言资源）；`HXLINGS_WINDOWS_INSTALLER_DIR` 将其产物注入 `Hxlings-bundle.wxs` 的 `<BootstrapperApplication>` + `HxlingsInstallerPayloads`，替代 WiX 默认界面。
-   - macOS：`tar`、`dmg`（无需 `--mode`）
+   - macOS：`tar.xz`（CI 将 `mcpp pack --pkg-format tar` 产物重封装为 `.tar.xz`）、`dmg`（无需 `--mode`）
 2. **CI 归档检查要点（`.github/workflows/ci.yml`）**：
-   - `set -o pipefail` 下禁止 `tar -tzf ... | grep -q`（会触发 SIGPIPE 141），应先存入变量再过滤检查。
-   - Linux `tar`/`deb`、macOS `tar`/`dmg`、Windows `msi` 文件表必须同时包含 `huxerui/resources.bin`、`app/images/hxlings.png`、`app/images/tray_icon.png`。
-   - macOS CI 门禁：使用 `ruby -c Casks/hxlings.rb` 校验 Cask 语法；对 `.tar.gz` 内 `bin/hxlings` 执行 `codesign --verify --strict`；只读挂载 `.dmg` 验证 `Hxlings.app`、`Applications` 软链、`Info.plist`、`AppIcon.icns`、`resources.bin` 与 `codesign --verify --deep --strict`。
+   - `set -o pipefail` 下禁止 `tar -tJf ... | grep -q`（会触发 SIGPIPE 141），应先存入变量再过滤检查。
+   - Linux `tar.xz`/`deb`、macOS `tar.xz`/`dmg`、Windows `msi` 文件表必须同时包含 `huxerui/resources.bin`、`app/images/hxlings.png`、`app/images/tray_icon.png`。
+   - macOS CI 门禁：使用 `ruby -c Casks/hxlings.rb` 校验 Cask 语法；对 `.tar.xz` 解出的 `bin/hxlings` 执行 `codesign --verify --strict`；只读挂载 `.dmg` 验证 `Hxlings.app`、`Applications` 软链、`Info.plist`、`AppIcon.icns`、`resources.bin` 与 `codesign --verify --deep --strict`。
    - Windows `.msi` 与 `-setup.exe` 门禁：校验 `.msi >= 2MB`、`Media.Cabinet` 以 `#` 开头、快捷方式与 `ARPPRODUCTICON` 齐全，并将孤立 `.msi` 拷入空目录执行 `msiexec /a` 验证可解出 `hxlings.exe` + 运行时 DLL + `resources.bin`；对 `-setup.exe` 执行 `wix burn extract <bundle> -out ... -outba ...` 验证内置 `hxlings-installer.exe`、`mbanative.dll`、CRT DLL 与安装器资源且不含 `WixStandardBootstrapperApplication`。
    - Linux `.deb`/`.rpm` 原生依赖门禁：校验不打包 `libc.so.6`/`libgtk-4.so.1`、声明了发行版依赖，且在 `ubuntu-24.04` 实装 `.deb` 并确认 `readelf -V` 无 `GLIBC_2.39+`、`/usr/bin/ldd` 全部正常解析。
-   - Linux 自包含 `.tar.gz`/`.AppImage` 门禁：校验 `lib/ld-linux-x86-64.so.2`、`lib/libc.so.6`、`lib/libm.so.6`、`lib/gconv/`、`MCPP_BUNDLE_DIR` 与 `/usr/lib/x86_64-linux-gnu:/usr/lib64` 均存在，且随附链接器 `--list` 全量解析无 `not found`。
-3. **本地打包烟测与发布**：
+   - Linux 自包含 `.tar.xz`/`.AppImage` 门禁：校验 `lib/ld-linux-x86-64.so.2`、`lib/libc.so.6`、`lib/libm.so.6`、`lib/gconv/`、`MCPP_BUNDLE_DIR` 与 `/usr/lib/x86_64-linux-gnu:/usr/lib64` 均存在，且随附链接器 `--list` 全量解析无 `not found`，并校验压缩后体积阈值（`.tar.xz < 25MB`、`.AppImage < 26MB`）。
+3. **本地打包烟测、GitHub Pages 软件源与发布**：
    ```bash
    mcpp pack hxlings --release --mode self-contained --pkg-format tar --output /tmp/hxlings-check.tar.gz
    tar -tzf /tmp/hxlings-check.tar.gz | grep -E 'resources\.bin|app/images/(hxlings|tray_icon)\.png|ld-linux-x86-64\.so\.2'
    rm -f /tmp/hxlings-check.tar.gz
    ```
-   - `.github/workflows/release.yml` 由 `v*` Tag 触发并校验全部 9 个平台产物 + 生成 `SHA256SUMS.txt`，并自动附加 macOS Ad-hoc Gatekeeper 放行说明（发版升级版本号时同步更新 `Casks/hxlings.rb` 的 `version` 与 `sha256`）；切勿强制改写既有已发布 Tag。
+   - `.github/workflows/release.yml` 由 `v*` Tag 触发并校验全部 9 个平台产物 + 生成 `SHA256SUMS.txt`，自动附加 Linux 软件源与 macOS Ad-hoc Gatekeeper 放行说明（发版升级版本号时同步更新 `Casks/hxlings.rb` 的 `version` 与 `sha256`）；切勿强制改写既有已发布 Tag。
+   - 发版后自动调用 `.github/workflows/publish-linux-repo.yml`（通过 `scripts/build-linux-repo.sh` 使用项目专属 `GPG_PRIVATE_KEY` Secret 对 `.rpm`/`.deb` 及元数据签名，搭配 `docs/site/index.html`、`scripts/setup-repo.sh` 与 `resources/images/hxlings.png` 部署到 GitHub Pages）。

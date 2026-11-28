@@ -3,8 +3,14 @@ name: CI
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
   pull_request:
     branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
   workflow_dispatch:
   workflow_call:
     inputs:
@@ -114,14 +120,18 @@ jobs:
           }
 
           mkdir -p dist
+          command -v xz >/dev/null 2>&1 || (sudo apt-get update && sudo apt-get install -y --no-install-recommends xz-utils)
 
-          tar_out="dist/hxlings-${pkg_version}-linux-x86_64.tar.gz"
-          mcpp pack hxlings --release --mode self-contained --pkg-format tar --output "$tar_out"
-          test -s "$tar_out"
+          tar_raw="$RUNNER_TEMP/hxlings-raw.tar.gz"
+          tar_out="dist/hxlings-${pkg_version}-linux-x86_64.tar.xz"
+          rm -f "$tar_raw" "$tar_out"
+          mcpp pack hxlings --release --mode self-contained --pkg-format tar --output "$tar_raw"
+          test -s "$tar_raw"
 
           tar_repack_dir="$RUNNER_TEMP/hxlings-tar-repack"
           rm -rf "$tar_repack_dir" && mkdir -p "$tar_repack_dir"
-          tar -xzf "$tar_out" -C "$tar_repack_dir"
+          tar -xzf "$tar_raw" -C "$tar_repack_dir"
+          rm -f "$tar_raw"
           tar_top=$(find "$tar_repack_dir" -mindepth 1 -maxdepth 1 -type d | head -n 1)
           test -d "$tar_top"
           for launcher in "$tar_top/hxlings" "$tar_top/run.sh"; do
@@ -130,17 +140,15 @@ jobs:
               chmod +x "$launcher"
             fi
           done
-          tar -C "$tar_repack_dir" -czf "$tar_out" "$(basename "$tar_top")"
-
-          tar_list=$(tar -tzf "$tar_out")
-          printf '%s\n' "$tar_list" | grep -q 'hxlings.resources/huxerui/resources.bin'
-          printf '%s\n' "$tar_list" | grep -q 'hxlings\.resources/huxerui/app/images/hxlings\.png'
-          printf '%s\n' "$tar_list" | grep -q 'hxlings\.resources/huxerui/app/images/tray_icon\.png'
-          printf '%s\n' "$tar_list" | grep -q 'dropdown_indicator\.huxv'
-          printf '%s\n' "$tar_list" | grep -q 'lib/ld-linux-x86-64\.so\.2'
-          printf '%s\n' "$tar_list" | grep -q 'lib/libc\.so\.6'
-          printf '%s\n' "$tar_list" | grep -q 'lib/libm\.so\.6'
-          printf '%s\n' "$tar_list" | grep -q 'lib/gconv/'
+          while IFS= read -r -d '' bin_file; do
+            if file "$bin_file" | grep -q 'ELF.*not stripped'; then
+              chmod u+w "$bin_file"
+              case "$(basename "$bin_file")" in
+                ld-linux-*.so*|libc.so.*) strip --strip-debug "$bin_file" ;;
+                *) strip --strip-unneeded "$bin_file" ;;
+              esac
+            fi
+          done < <(find "$tar_top/bin" "$tar_top/lib" -type f -print0)
 
           grep -q 'MCPP_BUNDLE_DIR' "$tar_top/hxlings"
           grep -q 'ld-linux-x86-64.so.2' "$tar_top/hxlings"
@@ -150,6 +158,20 @@ jobs:
           printf '%s\n' "$ldd_out" | grep -E 'libc\.so\.6 => ' | grep -Fq "$tar_top/"
           printf '%s\n' "$ldd_out" | grep -E 'libm\.so\.6 => ' | grep -Fq "$tar_top/"
           printf '%s\n' "$ldd_out" | grep -E 'libgtk-4\.so\.1 => ' | grep -Fq "$tar_top/"
+
+          tar -C "$tar_repack_dir" -cf - "$(basename "$tar_top")" | xz -T0 -6 > "$tar_out"
+          test -s "$tar_out"
+          test "$(stat -c%s "$tar_out")" -lt 25000000
+
+          tar_list=$(tar -tJf "$tar_out")
+          printf '%s\n' "$tar_list" | grep -q 'hxlings.resources/huxerui/resources.bin'
+          printf '%s\n' "$tar_list" | grep -q 'hxlings\.resources/huxerui/app/images/hxlings\.png'
+          printf '%s\n' "$tar_list" | grep -q 'hxlings\.resources/huxerui/app/images/tray_icon\.png'
+          printf '%s\n' "$tar_list" | grep -q 'dropdown_indicator\.huxv'
+          printf '%s\n' "$tar_list" | grep -q 'lib/ld-linux-x86-64\.so\.2'
+          printf '%s\n' "$tar_list" | grep -q 'lib/libc\.so\.6'
+          printf '%s\n' "$tar_list" | grep -q 'lib/libm\.so\.6'
+          printf '%s\n' "$tar_list" | grep -q 'lib/gconv/'
           rm -rf "$tar_repack_dir"
 
           deb_src=$(mcpp pack hxlings --release --mode system --pkg-format deb --message-format json | extract_pack_path)
@@ -194,6 +216,7 @@ jobs:
           cp "$app_src" "$app_out"
           chmod +x "$app_out"
           file "$app_out" | grep -qiE 'ELF|AppImage'
+          test "$(stat -c%s "$app_out")" -lt 26000000
           app_check_dir="$RUNNER_TEMP/hxlings-appimage-check"
           rm -rf "$app_check_dir" && mkdir -p "$app_check_dir"
           (cd "$app_check_dir" && "$OLDPWD/$app_out" --appimage-extract >/dev/null)
@@ -203,6 +226,8 @@ jobs:
           test -s "$app_check_dir/squashfs-root/bin/hxlings.resources/huxerui/resources.bin"
           grep -q 'MCPP_BUNDLE_DIR' "$app_check_dir/squashfs-root/hxlings"
           grep -Fq '/usr/lib/x86_64-linux-gnu:/usr/lib64' "$app_check_dir/squashfs-root/hxlings"
+          app_ldd_out=$("$app_check_dir/squashfs-root/lib/ld-linux-x86-64.so.2" --library-path "$app_check_dir/squashfs-root/lib:/usr/lib/x86_64-linux-gnu:/usr/lib64:/lib/x86_64-linux-gnu:/lib64" --list "$app_check_dir/squashfs-root/bin/hxlings")
+          ! printf '%s\n' "$app_ldd_out" | grep -q 'not found'
           rm -rf "$app_check_dir"
 
           ls -lh dist
@@ -293,21 +318,29 @@ jobs:
 
           mkdir -p dist
 
-          tar_out="dist/hxlings-${pkg_version}-macos-arm64.tar.gz"
-          mcpp pack hxlings --release --pkg-format tar --output "$tar_out"
+          tar_raw="$RUNNER_TEMP/hxlings-macos-raw.tar.gz"
+          tar_out="dist/hxlings-${pkg_version}-macos-arm64.tar.xz"
+          rm -f "$tar_raw" "$tar_out"
+          mcpp pack hxlings --release --pkg-format tar --output "$tar_raw"
+          test -s "$tar_raw"
+
+          tar_check_dir="$RUNNER_TEMP/hxlings-macos-tar-check"
+          rm -rf "$tar_check_dir" && mkdir -p "$tar_check_dir"
+          tar -xzf "$tar_raw" -C "$tar_check_dir"
+          rm -f "$tar_raw"
+          tar_top=$(find "$tar_check_dir" -mindepth 1 -maxdepth 1 -type d | head -n 1)
+          test -d "$tar_top"
+          tar_bin=$(find "$tar_check_dir" -type f -path '*/bin/hxlings' | head -n 1)
+          test -x "$tar_bin"
+          codesign --verify --strict --verbose=2 "$tar_bin"
+
+          tar -C "$tar_check_dir" -cJf "$tar_out" "$(basename "$tar_top")"
           test -s "$tar_out"
-          tar_list=$(tar -tzf "$tar_out")
+          tar_list=$(tar -tJf "$tar_out")
           printf '%s\n' "$tar_list" | grep -Eq '(hxlings\.resources|HuxerUI)/huxerui/resources\.bin'
           printf '%s\n' "$tar_list" | grep -q 'huxerui/app/images/hxlings\.png'
           printf '%s\n' "$tar_list" | grep -q 'huxerui/app/images/tray_icon\.png'
           printf '%s\n' "$tar_list" | grep -q 'dropdown_indicator\.huxv'
-
-          tar_check_dir="$RUNNER_TEMP/hxlings-macos-tar-check"
-          rm -rf "$tar_check_dir" && mkdir -p "$tar_check_dir"
-          tar -xzf "$tar_out" -C "$tar_check_dir"
-          tar_bin=$(find "$tar_check_dir" -type f -path '*/bin/hxlings' | head -n 1)
-          test -x "$tar_bin"
-          codesign --verify --strict --verbose=2 "$tar_bin"
           rm -rf "$tar_check_dir"
 
           dmg_src=$(mcpp pack hxlings --release --pkg-format dmg --message-format json | extract_pack_path)

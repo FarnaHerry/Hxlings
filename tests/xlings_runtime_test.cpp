@@ -418,6 +418,23 @@ void TestAppUpdaterParsingSha256AndSelection() {
     const auto port_sel = SelectPlatformReleaseAsset(*rel, {.os_name = "linux", .arch = "x86_64"});
     Check(port_sel.first.has_value() && port_sel.second == UpdateInstallKind::LinuxAppImage,
           "Linux portable fallback picks AppImage");
+
+    const AppReleaseInfo tar_only_rel{
+        .tag_name = "v0.1.8",
+        .version = "0.1.8",
+        .assets = {
+            {.name = "hxlings-0.1.8-macos-arm64.tar.gz", .download_url = "https://example.invalid/mac.tar.gz"},
+            {.name = "hxlings-0.1.8-macos-arm64.tar.xz", .download_url = "https://example.invalid/mac.tar.xz"},
+            {.name = "hxlings-0.1.8-linux-x86_64.tar.gz", .download_url = "https://example.invalid/lin.tar.gz"},
+            {.name = "hxlings-0.1.8-linux-x86_64.tar.xz", .download_url = "https://example.invalid/lin.tar.xz"},
+        },
+    };
+    const auto mac_xz = SelectPlatformReleaseAsset(tar_only_rel, {.os_name = "macos", .arch = "arm64"});
+    Check(mac_xz.first.has_value() && mac_xz.second == UpdateInstallKind::MacOsTarXz,
+          "macOS prefers tar.xz over tar.gz when dmg absent");
+    const auto lin_xz = SelectPlatformReleaseAsset(tar_only_rel, {.os_name = "linux", .arch = "x86_64"});
+    Check(lin_xz.first.has_value() && lin_xz.second == UpdateInstallKind::LinuxTarXz,
+          "Linux prefers tar.xz over tar.gz when package/AppImage absent");
 }
 
 void TestSingleInstanceGuard() {

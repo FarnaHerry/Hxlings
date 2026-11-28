@@ -57,10 +57,20 @@ mcpp pack hxlings --release --pkg-format dmg        # macOS DMG 磁盘镜像
 
 ## 发布产物矩阵（Release）
 
-- **Linux (`x86_64`)**：`.tar.gz` 便携归档、`.deb`、`.rpm`、`.AppImage`（附带桌面图标 [hxlings.svg](platform/linux/package/hxlings.svg)、应用/托盘 PNG 与 `.desktop` 入口）
+- **Linux (`x86_64`)**：`.tar.xz` 便携归档（对随附运行时执行安全 `strip` 并采用 `xz -6` 压缩）、`.deb`、`.rpm`、`.AppImage`（附带桌面图标 [hxlings.svg](platform/linux/package/hxlings.svg)、应用/托盘 PNG 与 `.desktop` 入口）
 - **Windows (`x86_64`)**：`.zip` 便携归档、`.msi`、`-setup.exe`（WiX Burn 安装器，内嵌 [app.ico](platform/windows/app.ico)）
-- **macOS (`arm64`)**：`.tar.gz` 便携归档、`.dmg`（含 `Hxlings.app`、[AppIcon.icns](platform/macos/AppIcon.icns) 与 `/Applications` 快捷方式）
+- **macOS (`arm64`)**：`.tar.xz` 便携归档、`.dmg`（含 `Hxlings.app`、[AppIcon.icns](platform/macos/AppIcon.icns) 与 `/Applications` 快捷方式）
 - **校验文件**：随 Release 一并发布 `SHA256SUMS.txt`
+
+### Linux 系统软件源（RPM / APT，支持 `dnf` / `apt` / `zypper` 自动更新）
+
+如果希望将 `hxlings` 纳入系统包管理器（安装到 `/opt/hxlings` 并支持 `sudo dnf upgrade` / `sudo apt upgrade` / `sudo zypper update` 自动更新）：
+
+```bash
+curl -fsSL https://farnaherry.github.io/Hxlings/setup-repo.sh | sudo bash
+```
+
+仅配置软件源与导入 GPG 公钥可加 `--repo-only`（`... | sudo bash -s -- --repo-only`），移除源配置可传 `--uninstall`。也可以访问软件源页面 <https://farnaherry.github.io/Hxlings/> 查看手动添加 `dnf` / `zypper` / `apt` 源的配置命令与 GPG 公钥指纹。
 
 ### macOS 安装与首次打开说明
 
@@ -71,8 +81,9 @@ mcpp pack hxlings --release --pkg-format dmg        # macOS DMG 磁盘镜像
    xattr -dr com.apple.quarantine /Applications/Hxlings.app
    ```
    （也可前往「系统设置 → 隐私与安全性」点击“仍要打开”。）
-2. **`.tar.gz` 便携包**：解压后对解压目录清除隔离属性：
+2. **`.tar.xz` 便携包**：解压后对解压目录清除隔离属性：
    ```bash
+   tar -xJf hxlings-*-macos-arm64.tar.xz
    xattr -dr com.apple.quarantine ./hxlings-*-macos-arm64
    ```
 3. **Homebrew Cask 安装**（仓库内置 [Casks/hxlings.rb](Casks/hxlings.rb)；由于 Homebrew 5.0 起已移除 `--no-quarantine` 参数，安装后需手动执行一次放行命令）：

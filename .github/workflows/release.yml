@@ -47,14 +47,14 @@ jobs:
           test "$release_version" != "$GITHUB_REF_NAME"
 
           assets=(
-            "hxlings-${release_version}-linux-x86_64.tar.gz"
+            "hxlings-${release_version}-linux-x86_64.tar.xz"
             "hxlings-${release_version}-linux-x86_64.deb"
             "hxlings-${release_version}-linux-x86_64.rpm"
             "hxlings-${release_version}-linux-x86_64.AppImage"
             "hxlings-${release_version}-windows-x86_64.zip"
             "hxlings-${release_version}-windows-x86_64.msi"
             "hxlings-${release_version}-windows-x86_64-setup.exe"
-            "hxlings-${release_version}-macos-arm64.tar.gz"
+            "hxlings-${release_version}-macos-arm64.tar.xz"
             "hxlings-${release_version}-macos-arm64.dmg"
           )
 
@@ -90,15 +90,29 @@ jobs:
             '  xattr -dr com.apple.quarantine /Applications/Hxlings.app' \
             '  ```')
 
+          linux_repo_note=$(printf '%s\n' \
+            "" \
+            "## Linux RPM / APT Repository" \
+            "" \
+            'Install and keep `hxlings` updated via the GPG-signed GitHub Pages repository (Fedora / RHEL / openSUSE / Debian / Ubuntu):' \
+            "" \
+            '```bash' \
+            'curl -fsSL https://farnaherry.github.io/Hxlings/setup-repo.sh | sudo bash' \
+            '```')
+
           if [ -f "$notes" ]; then
             merged_notes="$RUNNER_TEMP/release-notes.md"
             cp "$notes" "$merged_notes"
+            if ! grep -Fq 'setup-repo.sh' "$merged_notes"; then
+              printf '%s\n' "$linux_repo_note" >> "$merged_notes"
+            fi
             if ! grep -Fq 'com.apple.quarantine' "$merged_notes"; then
               printf '%s\n' "$macos_note" >> "$merged_notes"
             fi
             note_args=(--notes-file "$merged_notes")
           else
-            note_args=(--generate-notes --notes "$macos_note")
+            combined_notes=$(printf '%s\n%s\n' "$linux_repo_note" "$macos_note")
+            note_args=(--generate-notes --notes "$combined_notes")
           fi
 
           if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
@@ -110,3 +124,17 @@ jobs:
               "${note_args[@]}" \
               release/*
           fi
+
+  publish-linux-repo:
+    name: Publish Linux RPM/APT repository (GitHub Pages)
+    needs: [publish]
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/publish-linux-repo.yml
+    with:
+      tag: ${{ github.ref_name }}
+      pkg_name: hxlings
+      display_name: Hxlings
+    secrets: inherit

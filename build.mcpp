@@ -60,6 +60,77 @@ void configure_linux_glibc_compat() {
     mcpp::link_flag("-Wl,--wrap=remainder");
 }
 
+std::string shell_quote_single(std::string_view text) {
+    std::string out;
+    out.reserve(text.size() + 4);
+    out.push_back('\'');
+    for (const char ch : text) {
+        if (ch == '\'') {
+            out += "'\\''";
+        } else {
+            out.push_back(ch);
+        }
+    }
+    out.push_back('\'');
+    return out;
+}
+
+void run_strip_batch(std::string_view flag, const std::vector<std::string>& files) {
+    if (files.empty()) return;
+    constexpr std::size_t kBatchSize = 64;
+    for (std::size_t i = 0; i < files.size(); i += kBatchSize) {
+        std::string cmd = "strip ";
+        cmd += flag;
+        const std::size_t end = std::min(files.size(), i + kBatchSize);
+        for (std::size_t j = i; j < end; ++j) {
+            cmd.push_back(' ');
+            cmd += shell_quote_single(files[j]);
+        }
+        cmd += " >/dev/null 2>&1 || true";
+        (void)std::system(cmd.c_str());
+    }
+}
+
+void strip_linux_self_contained_stage(const std::filesystem::path& stage) {
+    std::error_code ec;
+    const std::filesystem::path lib_dir = stage / "lib";
+    if (!std::filesystem::is_directory(lib_dir, ec)) return;
+    if (std::system("command -v strip >/dev/null 2>&1") != 0) return;
+
+    std::vector<std::string> debug_only;
+    std::vector<std::string> unneeded;
+    for (auto it = std::filesystem::recursive_directory_iterator(
+             lib_dir, std::filesystem::directory_options::skip_permission_denied, ec);
+         !ec && it != std::filesystem::recursive_directory_iterator();
+         it.increment(ec)) {
+        std::error_code entry_ec;
+        if (it->is_symlink(entry_ec) || !it->is_regular_file(entry_ec)) continue;
+        const std::filesystem::path path = it->path();
+        std::ifstream in(path, std::ios::binary);
+        if (!in) continue;
+        char magic[4]{};
+        in.read(magic, 4);
+        if (in.gcount() != 4 ||
+            magic[0] != '\x7f' || magic[1] != 'E' || magic[2] != 'L' || magic[3] != 'F') {
+            continue;
+        }
+        in.close();
+        std::filesystem::permissions(
+            path,
+            std::filesystem::perms::owner_write,
+            std::filesystem::perm_options::add,
+            entry_ec);
+        const std::string name = path.filename().string();
+        if (name.starts_with("ld-linux-") || name.starts_with("libc.so")) {
+            debug_only.push_back(path.string());
+        } else {
+            unneeded.push_back(path.string());
+        }
+    }
+    run_strip_batch("--strip-debug", debug_only);
+    run_strip_batch("--strip-unneeded", unneeded);
+}
+
 void patch_linux_self_contained_launcher() {
     if (std::string_view(mcpp::target_os()) != "linux" ||
         std::string_view(mcpp::pack_format()) != "appimage") {
@@ -91,6 +162,7 @@ void patch_linux_self_contained_launcher() {
             std::filesystem::perm_options::add,
             ec);
     }
+    strip_linux_self_contained_stage(stage);
 }
 
 huxerui::rules::options make_rules_options() {
