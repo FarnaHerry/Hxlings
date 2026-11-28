@@ -293,11 +293,22 @@
 
     [role="tabpanel"] {
       grid-area: 1 / 1;
+      position: relative;
+      z-index: 1;
       min-inline-size: 0;
+    }
+
+    [role="tabpanel"][hidden] {
+      z-index: 0;
+      pointer-events: none;
+      align-self: start;
+      max-block-size: 0;
+      overflow: hidden;
     }
 
     .panel-card {
       padding: 1.15rem 1.25rem 1.25rem;
+      min-inline-size: 0;
     }
 
     .panel-desc {
@@ -307,16 +318,16 @@
     }
 
     .copyable {
-      display: flex;
-      align-items: start;
-      gap: 0.5rem;
+      position: relative;
+      display: block;
       margin: 0.65rem 0;
+      min-inline-size: 0;
+      max-inline-size: 100%;
     }
 
     .copyable pre {
-      flex: 1 1 auto;
-      min-width: 0;
       margin: 0;
+      padding-inline-end: calc(var(--target-size) + 1rem);
     }
 
     pre {
@@ -327,10 +338,13 @@
       border: 1px solid var(--code-border);
       border-radius: 8px;
       padding: 0.85rem 1rem;
+      max-inline-size: 100%;
       overflow-x: auto;
       -webkit-overflow-scrolling: touch;
       font-size: 0.86rem;
       line-height: 1.5;
+      user-select: text;
+      pointer-events: auto;
     }
 
     code {
@@ -338,8 +352,10 @@
     }
 
     .copy {
-      position: relative;
-      flex: none;
+      position: absolute;
+      inset-block-start: 0.45rem;
+      inset-inline-end: 0.45rem;
+      z-index: 2;
       display: inline-flex;
       align-items: center;
     }
@@ -353,9 +369,19 @@
       padding: 4px;
       border-radius: 6px;
       border: 1px solid var(--code-border);
-      background: #1b222c;
+      background: rgba(27, 34, 44, 0.94);
       color: #e6edf3;
       cursor: pointer;
+      opacity: 0.9;
+      transition: opacity 0.15s ease;
+    }
+
+    .copyable:hover .copy-button,
+    .copyable:focus-within .copy-button,
+    .copyable .copy-button:focus-visible,
+    .copyable .copy-button[data-copied],
+    .copyable .copy-button[data-failed] {
+      opacity: 1;
     }
 
     .copy-button .icon-check { display: none; }
@@ -385,32 +411,6 @@
       opacity: 1;
     }
 
-    @media (hover: hover) {
-      .copyable {
-        display: block;
-        position: relative;
-      }
-      .copyable pre {
-        padding-inline-end: 3.25rem;
-      }
-      .copyable .copy {
-        position: absolute;
-        inset-block-start: 0.5rem;
-        inset-inline-end: 0.5rem;
-      }
-      .copyable .copy-button {
-        opacity: 0;
-        transition: opacity 0.15s ease;
-      }
-      .copyable:hover .copy-button,
-      .copyable:focus-within .copy-button,
-      .copyable .copy-button:focus-visible,
-      .copyable .copy-button[data-copied],
-      .copyable .copy-button[data-failed] {
-        opacity: 1;
-      }
-    }
-
     @media (prefers-reduced-motion: reduce) {
       .tip, .copy-button { transition: none; }
     }
@@ -421,6 +421,8 @@
       border-radius: 8px;
       padding: 0.6rem 0.9rem;
       background: var(--surface-alt);
+      min-inline-size: 0;
+      max-inline-size: 100%;
     }
 
     summary {
@@ -525,6 +527,9 @@
         padding: 0.75rem 0.8rem;
         font-size: 0.81rem;
       }
+      .copyable pre {
+        padding-inline-end: calc(var(--target-size) + 0.9rem);
+      }
       details {
         padding: 0.55rem 0.75rem;
       }
@@ -572,7 +577,7 @@
               <div class="panel-card">
                 <p class="panel-desc" data-i18n="descRepo">一键导入 Hxlings 专属 GPG 公钥并配置系统软件源（安装到 /opt/hxlings，支持 dnf / apt / zypper 随系统自动更新）：</p>
                 <div class="copyable">
-                  <pre><code id="cmd-repo">curl -fsSL {{BASE_URL}}/setup-repo.sh | sudo bash</code></pre>
+                  <pre tabindex="0"><code id="cmd-repo">curl -fsSL {{BASE_URL}}/setup-repo.sh | sudo bash</code></pre>
                   <span class="copy">
                     <button type="button" class="copy-button" command="--copy" commandfor="cmd-repo" aria-label="复制系统软件源安装命令">
                       <svg class="icon-copy" width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M4 2a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V2zm2-1a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V2a1 1 0 0 0-1-1H6zM2 5a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-1H8v1H2V6h1V5H2z"/></svg>
@@ -585,7 +590,7 @@
                 <details>
                   <summary data-i18n="manualRepoSummary">查看手动配置 Fedora/RHEL (dnf)、openSUSE (zypper) 与 Debian/Ubuntu (apt) 命令</summary>
                   <div class="copyable">
-                    <pre><code id="cmd-dnf"># Fedora / RHEL (x86_64)
+                    <pre tabindex="0"><code id="cmd-dnf"># Fedora / RHEL (x86_64)
 sudo rpm --import {{BASE_URL}}/gpg.key
 sudo tee /etc/yum.repos.d/hxlings.repo &lt;&lt;'REPO'
 [hxlings]
@@ -606,7 +611,7 @@ sudo dnf install -y hxlings</code></pre>
                     </span>
                   </div>
                   <div class="copyable">
-                    <pre><code id="cmd-zypper"># openSUSE (x86_64)
+                    <pre tabindex="0"><code id="cmd-zypper"># openSUSE (x86_64)
 sudo rpm --import {{BASE_URL}}/gpg.key
 sudo tee /etc/zypp/repos.d/hxlings.repo &lt;&lt;'REPO'
 [hxlings]
@@ -628,7 +633,7 @@ sudo zypper refresh hxlings &amp;&amp; sudo zypper install -y hxlings</code></pr
                     </span>
                   </div>
                   <div class="copyable">
-                    <pre><code id="cmd-apt"># Debian / Ubuntu (amd64)
+                    <pre tabindex="0"><code id="cmd-apt"># Debian / Ubuntu (amd64)
 curl -fsSL {{BASE_URL}}/gpg.key | sudo gpg --dearmor -o /etc/apt/keyrings/hxlings.gpg
 echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/hxlings.gpg] {{BASE_URL}}/apt stable main" | sudo tee /etc/apt/sources.list.d/hxlings.list
 sudo apt update &amp;&amp; sudo apt install -y hxlings</code></pre>
@@ -648,7 +653,7 @@ sudo apt update &amp;&amp; sudo apt install -y hxlings</code></pre>
               <div class="panel-card">
                 <p class="panel-desc" data-i18n="descPortable">无需管理员权限，从 GitHub Releases 下载并校验 SHA256SUMS.txt 后运行自包含 AppImage 或 .tar.xz 压缩包：</p>
                 <div class="copyable">
-                  <pre><code id="cmd-portable"># 下载并运行 AppImage (x86_64)
+                  <pre tabindex="0"><code id="cmd-portable"># 下载并运行 AppImage (x86_64)
 curl -fsSLO {{REPO_URL}}/releases/download/v{{VERSION}}/hxlings-{{VERSION}}-linux-x86_64.AppImage
 chmod +x hxlings-{{VERSION}}-linux-x86_64.AppImage
 ./hxlings-{{VERSION}}-linux-x86_64.AppImage
@@ -673,7 +678,7 @@ tar -xJf hxlings-{{VERSION}}-linux-x86_64.tar.xz
               <div class="panel-card">
                 <p class="panel-desc" data-i18n="descMacos">支持 Apple Silicon (arm64)，可通过 Homebrew Cask、DMG 或 .tar.xz 安装（首次打开需清除隔离属性）：</p>
                 <div class="copyable">
-                  <pre><code id="cmd-macos">brew tap farnaherry/hxlings {{REPO_URL}}
+                  <pre tabindex="0"><code id="cmd-macos">brew tap farnaherry/hxlings {{REPO_URL}}
 brew install --cask farnaherry/hxlings/hxlings
 xattr -dr com.apple.quarantine /Applications/Hxlings.app</code></pre>
                   <span class="copy">
@@ -692,7 +697,7 @@ xattr -dr com.apple.quarantine /Applications/Hxlings.app</code></pre>
               <div class="panel-card">
                 <p class="panel-desc" data-i18n="descWin">提供基于 HuxerUI 定制界面的 WiX Burn 安装向导（-setup.exe）、企业静默部署 .msi 以及免安装 .zip：</p>
                 <div class="copyable">
-                  <pre><code id="cmd-win"># winget / MSI 静默安装或直接运行图形安装向导
+                  <pre tabindex="0"><code id="cmd-win"># winget / MSI 静默安装或直接运行图形安装向导
 curl.exe -fsSLO {{REPO_URL}}/releases/download/v{{VERSION}}/hxlings-{{VERSION}}-windows-x86_64-setup.exe
 .\hxlings-{{VERSION}}-windows-x86_64-setup.exe</code></pre>
                   <span class="copy">
@@ -925,6 +930,21 @@ curl.exe -fsSLO {{REPO_URL}}/releases/download/v{{VERSION}}/hxlings-{{VERSION}}-
         }, 2000));
       };
 
+      const legacyCopy = (text) => {
+        const previousFocus = document.activeElement;
+        const field = Object.assign(document.createElement('textarea'), { value: text });
+        field.setAttribute('readonly', '');
+        field.style.cssText = 'position:fixed;inset-block-start:0;opacity:0';
+        document.body.append(field);
+        field.select();
+        try {
+          return document.execCommand('copy');
+        } finally {
+          field.remove();
+          previousFocus?.focus({ preventScroll: true });
+        }
+      };
+
       const copy = async (button, target) => {
         const text = target.innerText.trim();
         if (!text) return;
@@ -932,7 +952,7 @@ curl.exe -fsSLO {{REPO_URL}}/releases/download/v{{VERSION}}/hxlings-{{VERSION}}-
           await navigator.clipboard.writeText(text);
           report(button, true);
         } catch {
-          report(button, false);
+          report(button, legacyCopy(text));
         }
       };
 
