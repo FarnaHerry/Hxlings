@@ -327,7 +327,7 @@
 
     .copyable pre {
       margin: 0;
-      padding-inline-end: calc(var(--target-size) + 1rem);
+      padding-inline-end: 3.25rem;
     }
 
     pre {
@@ -361,11 +361,13 @@
     }
 
     .copy-button {
+      position: relative;
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      min-inline-size: var(--target-size);
-      min-block-size: var(--target-size);
+      gap: 0.35rem;
+      min-inline-size: 32px;
+      min-block-size: 32px;
       padding: 4px;
       border-radius: 6px;
       border: 1px solid var(--code-border);
@@ -374,6 +376,21 @@
       cursor: pointer;
       opacity: 0.9;
       transition: opacity 0.15s ease;
+    }
+
+    @media (pointer: coarse) {
+      .copy-button::after {
+        content: "";
+        position: absolute;
+        inset: -6px;
+      }
+    }
+
+    .copy-label {
+      display: none;
+      font-size: 0.8rem;
+      font-weight: 500;
+      line-height: 1;
     }
 
     .copyable:hover .copy-button,
@@ -523,15 +540,69 @@
       .panel-card {
         padding: 0.95rem 0.9rem 1rem;
       }
-      pre {
-        padding: 0.75rem 0.8rem;
-        font-size: 0.81rem;
+      .copyable {
+        display: flex;
+        flex-direction: column;
+        background: var(--code-bg);
+        border: 1px solid var(--code-border);
+        border-radius: 8px;
+        overflow: hidden;
+      }
+      .copyable .copy {
+        position: static;
+        order: -1;
+        display: flex;
+        flex-direction: row-reverse;
+        align-items: center;
+        justify-content: flex-start;
+        gap: 0.5rem;
+        padding: 0.35rem 0.5rem;
+        background: #161d27;
+        border-bottom: 1px solid var(--code-border);
+      }
+      .copyable .copy-button {
+        min-inline-size: auto;
+        min-block-size: 34px;
+        padding: 0.3rem 0.65rem;
+        opacity: 1;
+        background: #212a36;
+      }
+      .copyable .copy-button::after {
+        inset: 0;
+      }
+      .copyable .copy-label {
+        display: inline;
+      }
+      .copyable .tip {
+        position: static;
+        transform: none;
+        margin-inline-end: auto;
+        background: transparent;
+        border: 0;
+        padding: 0 0.25rem;
+        color: #8ee5a1;
+        font-size: 0.78rem;
+      }
+      .copyable .copy-button[data-failed] + .tip {
+        color: #f8938b;
       }
       .copyable pre {
-        padding-inline-end: calc(var(--target-size) + 0.9rem);
+        border: 0;
+        border-radius: 0;
+        padding: 0.75rem 0.85rem;
+        font-size: 0.81rem;
       }
       details {
         padding: 0.55rem 0.75rem;
+      }
+    }
+
+    @media (pointer: coarse) {
+      @container tabs (inline-size <= 36rem) {
+        .copyable .copy-button {
+          min-block-size: 40px;
+          padding: 0.4rem 0.8rem;
+        }
       }
     }
   </style>
@@ -582,6 +653,7 @@
                     <button type="button" class="copy-button" command="--copy" commandfor="cmd-repo" aria-label="复制系统软件源安装命令">
                       <svg class="icon-copy" width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M4 2a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V2zm2-1a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V2a1 1 0 0 0-1-1H6zM2 5a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-1H8v1H2V6h1V5H2z"/></svg>
                       <svg class="icon-check" width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.75.75 0 0 1 1.06-1.06L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0z"/></svg>
+                      <span class="copy-label" aria-hidden="true" data-i18n="copyBtn">复制</span>
                     </button>
                     <span class="tip" role="status"></span>
                   </span>
@@ -606,6 +678,7 @@ sudo dnf install -y hxlings</code></pre>
                       <button type="button" class="copy-button" command="--copy" commandfor="cmd-dnf" aria-label="复制 dnf 手动源配置命令">
                         <svg class="icon-copy" width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M4 2a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V2zm2-1a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V2a1 1 0 0 0-1-1H6zM2 5a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-1H8v1H2V6h1V5H2z"/></svg>
                         <svg class="icon-check" width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.75.75 0 0 1 1.06-1.06L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0z"/></svg>
+                      <span class="copy-label" aria-hidden="true" data-i18n="copyBtn">复制</span>
                       </button>
                       <span class="tip" role="status"></span>
                     </span>
@@ -628,6 +701,7 @@ sudo zypper refresh hxlings &amp;&amp; sudo zypper install -y hxlings</code></pr
                       <button type="button" class="copy-button" command="--copy" commandfor="cmd-zypper" aria-label="复制 zypper 手动源配置命令">
                         <svg class="icon-copy" width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M4 2a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V2zm2-1a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V2a1 1 0 0 0-1-1H6zM2 5a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-1H8v1H2V6h1V5H2z"/></svg>
                         <svg class="icon-check" width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.75.75 0 0 1 1.06-1.06L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0z"/></svg>
+                      <span class="copy-label" aria-hidden="true" data-i18n="copyBtn">复制</span>
                       </button>
                       <span class="tip" role="status"></span>
                     </span>
@@ -641,6 +715,7 @@ sudo apt update &amp;&amp; sudo apt install -y hxlings</code></pre>
                       <button type="button" class="copy-button" command="--copy" commandfor="cmd-apt" aria-label="复制 apt 手动源配置命令">
                         <svg class="icon-copy" width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M4 2a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V2zm2-1a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V2a1 1 0 0 0-1-1H6zM2 5a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-1H8v1H2V6h1V5H2z"/></svg>
                         <svg class="icon-check" width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.75.75 0 0 1 1.06-1.06L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0z"/></svg>
+                      <span class="copy-label" aria-hidden="true" data-i18n="copyBtn">复制</span>
                       </button>
                       <span class="tip" role="status"></span>
                     </span>
@@ -666,6 +741,7 @@ tar -xJf hxlings-{{VERSION}}-linux-x86_64.tar.xz
                     <button type="button" class="copy-button" command="--copy" commandfor="cmd-portable" aria-label="复制 Linux 便携包命令">
                       <svg class="icon-copy" width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M4 2a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V2zm2-1a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V2a1 1 0 0 0-1-1H6zM2 5a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-1H8v1H2V6h1V5H2z"/></svg>
                       <svg class="icon-check" width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.75.75 0 0 1 1.06-1.06L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0z"/></svg>
+                      <span class="copy-label" aria-hidden="true" data-i18n="copyBtn">复制</span>
                     </button>
                     <span class="tip" role="status"></span>
                   </span>
@@ -685,6 +761,7 @@ xattr -dr com.apple.quarantine /Applications/Hxlings.app</code></pre>
                     <button type="button" class="copy-button" command="--copy" commandfor="cmd-macos" aria-label="复制 macOS 安装命令">
                       <svg class="icon-copy" width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M4 2a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V2zm2-1a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V2a1 1 0 0 0-1-1H6zM2 5a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-1H8v1H2V6h1V5H2z"/></svg>
                       <svg class="icon-check" width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.75.75 0 0 1 1.06-1.06L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0z"/></svg>
+                      <span class="copy-label" aria-hidden="true" data-i18n="copyBtn">复制</span>
                     </button>
                     <span class="tip" role="status"></span>
                   </span>
@@ -704,6 +781,7 @@ curl.exe -fsSLO {{REPO_URL}}/releases/download/v{{VERSION}}/hxlings-{{VERSION}}-
                     <button type="button" class="copy-button" command="--copy" commandfor="cmd-win" aria-label="复制 Windows 安装命令">
                       <svg class="icon-copy" width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M4 2a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V2zm2-1a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V2a1 1 0 0 0-1-1H6zM2 5a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-1H8v1H2V6h1V5H2z"/></svg>
                       <svg class="icon-check" width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.75.75 0 0 1 1.06-1.06L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0z"/></svg>
+                      <span class="copy-label" aria-hidden="true" data-i18n="copyBtn">复制</span>
                     </button>
                     <span class="tip" role="status"></span>
                   </span>
@@ -798,6 +876,7 @@ curl.exe -fsSLO {{REPO_URL}}/releases/download/v{{VERSION}}/hxlings-{{VERSION}}-
           f6Body: '零头文件纯模块架构搭配跨平台系统托盘与轻量级后台驻留模式，三态主题、自定义强调色与客户端设置本地解耦存储。',
           copied: '已复制',
           copyFailed: '复制失败',
+          copyBtn: '复制',
           langBtn: 'EN'
         },
         en: {
@@ -836,6 +915,7 @@ curl.exe -fsSLO {{REPO_URL}}/releases/download/v{{VERSION}}/hxlings-{{VERSION}}-
           f6Body: 'Header-free C++23 modules with cross-platform system tray, lightweight close-to-tray window reconstruction, and decoupled local theme settings.',
           copied: 'Copied',
           copyFailed: 'Copy failed',
+          copyBtn: 'Copy',
           langBtn: '中文'
         }
       };
